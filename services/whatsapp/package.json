@@ -1,0 +1,14 @@
+{
+  "name": "zoro-whatsapp-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local HTTP bridge between Zoro (Python) and WhatsApp Web via whatsapp-web.js.",
+  "main": "bridge.js",
+  "scripts": {
+    "start": "node bridge.js"
+  },
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.27.0"
+  }
+}

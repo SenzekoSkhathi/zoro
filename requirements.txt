@@ -1,0 +1,44 @@
+# Zoro backend — LiveKit Agents voice pipeline
+# Brain: Claude | STT: Deepgram | TTS: Deepgram Aura | Transport: LiveKit
+livekit-agents[deepgram,anthropic,silero]>=1.0
+# Transitive via livekit-agents (its tokenize module hard-imports it), but
+# pip has shipped a broken stub wheel here before — missing the compiled
+# lk_blingfire cext, which crash-loops the agent at import. Pin it so a
+# fresh env installs the real wheel; if it ever recurs, force-reinstall:
+#   pip install --force-reinstall --no-cache-dir livekit-blingfire
+livekit-blingfire>=1.1.0
+python-dotenv>=1.0
+
+# anthropic + httpx are pulled in transitively (livekit[anthropic], etc.)
+# but are imported directly throughout the code, so pin them explicitly.
+anthropic>=0.102.0
+httpx>=0.28
+
+# --- Always-on daemon (supervisor + system tray) ---
+pystray>=0.19
+Pillow>=10.0
+
+# --- Wake word: on-device "hey Zoro" (wake_service.py) ---
+# openwakeword pulls onnxruntime itself (hard dependency).
+openwakeword>=0.6.0
+sounddevice>=0.4
+numpy>=2.0
+
+# --- Local IPC between wake service / proactive / supervisor ---
+websockets>=12
+
+# --- Web search tool (Tavily REST via httpx — no SDK needed) ---
+
+# --- Proactive loop: Google Calendar/Gmail via cached workspace-mcp token ---
+google-api-python-client>=2.0
+google-auth>=2.0
+
+# --- Spotify (OAuth + Web API via spotipy) ---
+spotipy>=2.24
+
+# --- YouTube transcripts (no auth; Data API search uses httpx) ---
+youtube-transcript-api>=0.6
+
+# --- Screen vision + computer control (Phase 3) ---
+mss>=9.0
+pyautogui>=0.9

@@ -1,0 +1,179 @@
+"""Spotify Web API access using a cached OAuth token.
+
+Mirror of zoro_google.py: do the one-time browser sign-in via
+scripts/zoro_spotify_auth.py, then this module re-reads the cached token
+at ~/.zoro_spotify/token.json and refreshes it transparently.
+
+Playback control (play/pause/skip/queue/volume) requires Spotify Premium —
+the API returns 403 on free accounts. Callers should expect SpotifyException
+and surface a clear message. Playback also needs an active Spotify device
+(desktop, phone, or web player) running somewhere on the account.
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Optional
+
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
+
+_CACHE_DIR = Path(os.path.expanduser("~")) / ".zoro_spotify"
+_CACHE_PATH = _CACHE_DIR / "token.json"
+
+SCOPES = " ".join(
+    [
+        "user-read-playback-state",
+        "user-modify-playback-state",
+        "user-read-currently-playing",
+        "user-read-private",
+        "user-library-read",
+        "user-library-modify",
+        "playlist-read-private",
+        "playlist-read-collaborative",
+    ]
+)
+
+
+def _oauth() -> SpotifyOAuth:
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return SpotifyOAuth(
+        client_id=os.environ["SPOTIFY_CLIENT_ID"],
+        client_secret=os.environ["SPOTIFY_CLIENT_SECRET"],
+        redirect_uri=os.environ.get(
+            "SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback"
+        ),
+        scope=SCOPES,
+        cache_path=str(_CACHE_PATH),
+        open_browser=True,
+    )
+
+
+def _client() -> spotipy.Spotify:
+    if not _CACHE_PATH.exists():
+        raise RuntimeError(
+            "Spotify is not authorised. Run "
+            "`.venv/Scripts/python.exe scripts/zoro_spotify_auth.py` once."
+        )
+    return spotipy.Spotify(auth_manager=_oauth())
+
+
+def _active_device_id(sp: spotipy.Spotify) -> Optional[str]:
+    devices = sp.devices().get("devices", [])
+    for d in devices:
+        if d.get("is_active"):
+            return d["id"]
+    return devices[0]["id"] if devices else None
+
+
+def now_playing() -> Optional[dict]:
+    sp = _client()
+    cur = sp.current_playback()
+    if not cur or not cur.get("item"):
+        return None
+    item = cur["item"]
+    album = item.get("album", {})
+    # Pick the largest album-art image; Spotify returns sorted big→small.
+    images = album.get("images") or []
+    art_url = images[0]["url"] if images else ""
+    return {
+        "track": item["name"],
+        "artists": ", ".join(a["name"] for a in item.get("artists", [])),
+        "album": album.get("name", ""),
+        "art_url": art_url,
+        "is_playing": cur.get("is_playing", False),
+        "progress_ms": cur.get("progress_ms") or 0,
+        "duration_ms": item.get("duration_ms") or 0,
+        "device": cur.get("device", {}).get("name", ""),
+        "track_url": (item.get("external_urls") or {}).get("spotify", ""),
+    }
+
+
+def play() -> None:
+    sp = _client()
+    sp.start_playback(device_id=_active_device_id(sp))
+
+
+def pause() -> None:
+    sp = _client()
+    sp.pause_playback(device_id=_active_device_id(sp))
+
+
+def next_track() -> None:
+    sp = _client()
+    sp.next_track(device_id=_active_device_id(sp))
+
+
+def previous_track() -> None:
+    sp = _client()
+    sp.previous_track(device_id=_active_device_id(sp))
+
+
+def set_volume(percent: int) -> None:
+    sp = _client()
+    percent = max(0, min(100, int(percent)))
+    sp.volume(percent, device_id=_active_device_id(sp))
+
+
+def search_and_play(query: str, kind: str = "track") -> dict:
+    """Search Spotify and start playback of the first result.
+
+    kind: 'track' | 'album' | 'artist' | 'playlist'
+    """
+    if kind not in ("track", "album", "artist", "playlist"):
+        raise ValueError(f"unsupported kind: {kind}")
+    sp = _client()
+    res = sp.search(q=query, type=kind, limit=1)
+    items = res.get(f"{kind}s", {}).get("items", [])
+    if not items:
+        raise LookupError(f"no {kind} matching {query!r}")
+    item = items[0]
+    device_id = _active_device_id(sp)
+    if kind == "track":
+        sp.start_playback(device_id=device_id, uris=[item["uri"]])
+        return {
+            "name": item["name"],
+            "artists": ", ".join(
+                a["name"] for a in item.get("artists", [])
+            ),
+        }
+    sp.start_playback(device_id=device_id, context_uri=item["uri"])
+    artists = (
+        ", ".join(a["name"] for a in item.get("artists", []))
+        if kind == "album"
+        else ""
+    )
+    return {"name": item["name"], "artists": artists}
+
+
+def add_current_to_liked() -> Optional[str]:
+    sp = _client()
+    cur = sp.current_playback()
+    if not cur or not cur.get("item"):
+        return None
+    sp.current_user_saved_tracks_add([cur["item"]["id"]])
+    return cur["item"]["name"]
+
+
+def play_playlist(name: str) -> dict:
+    sp = _client()
+    results = sp.current_user_playlists(limit=50)
+    needle = name.lower()
+    target = next(
+        (p for p in results.get("items", []) if needle in p["name"].lower()),
+        None,
+    )
+    if not target:
+        raise LookupError(f"no playlist matching {name!r}")
+    sp.start_playback(
+        device_id=_active_device_id(sp), context_uri=target["uri"]
+    )
+    return {"name": target["name"]}
+
+
+def list_devices() -> list[dict]:
+    sp = _client()
+    return [
+        {"name": d["name"], "type": d["type"], "is_active": d["is_active"]}
+        for d in sp.devices().get("devices", [])
+    ]

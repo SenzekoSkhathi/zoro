@@ -1,0 +1,66 @@
+/* Chat-history inner content. Chrome comes from HudPanel.module.css. */
+
+.empty {
+  margin: 0;
+  color: #6fb3c9;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+}
+
+.line {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  display: flex;
+  gap: 0.7rem;
+}
+
+.who {
+  flex: 0 0 2.4rem;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding-top: 0.18rem;
+}
+
+.you .who {
+  color: #4fe3ff;
+}
+.zoro .who {
+  color: #ffc46b;
+}
+
+.text {
+  flex: 1;
+  color: #d6f3ff;
+}
+.zoro .text {
+  color: #f6e8cf;
+}
+
+/* Close control sits in the panel header (passed as headerExtra). */
+.close {
+  appearance: none;
+  background: transparent;
+  border: 1px solid rgba(79, 227, 255, 0.3);
+  color: #4fe3ff;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0.35rem 0.5rem;
+  cursor: pointer;
+  clip-path: polygon(
+    4px 0,
+    100% 0,
+    100% calc(100% - 4px),
+    calc(100% - 4px) 100%,
+    0 100%,
+    0 4px
+  );
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.close:hover {
+  background: rgba(79, 227, 255, 0.14);
+  color: #eafbff;
+}

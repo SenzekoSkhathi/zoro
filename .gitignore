@@ -1,0 +1,34 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Secrets and runtime state
+.env
+data/
+
+# Logs
+*.log
+
+# Build artifacts
+web/.next/
+web/tsconfig.tsbuildinfo
+**/node_modules/
+
+# Models (large binaries — keep out of git)
+models/
+
+# Sandbox / scratch
+workspace/
+
+# Local editor/agent config
+.claude/
+
+# WhatsApp runtime cache/session
+services/whatsapp/.wwebjs_cache/
+services/whatsapp/.wwebjs_auth/
+
+# OS / editor
+.DS_Store
+Thumbs.db
