@@ -21,6 +21,7 @@ list below to know which file to point Claude Code at via the
 - `src/zoro_reflector.py` — Nightly self-improvement loop.
 - `src/zoro_retry.py` — Bounded retry for transient network failures on idempotent tool reads.
 - `src/zoro_safety.py` — Shared safety / gating layer for Zoro's autonomous behaviour.
+- `src/zoro_self_mod.py` — Autonomous self-modification: caps, logging, and the picker.
 - `src/zoro_shell.py` — PowerShell access + Windows app launching.
 - `src/zoro_spotify.py` — Spotify Web API access using a cached OAuth token.
 - `src/zoro_subagents.py` — Sub-agent loader.
@@ -45,6 +46,7 @@ list below to know which file to point Claude Code at via the
 - `scripts/zoro_episodes.sql`
 - `scripts/zoro_flakiness.py`
 - `scripts/zoro_lessons.sql`
+- `scripts/zoro_self_mod_log.sql`
 - `scripts/zoro_spotify_auth.py`
 - `scripts/zoro_tasks.sql`
 

@@ -95,10 +95,29 @@ async def _branch_touches_protected(branch: str) -> tuple[bool, list[str]]:
     return bool(hit), hit
 
 
+async def _branch_diff_stats(branch: str) -> tuple[int, int]:
+    """Return (files_changed, lines_changed) for the branch vs main."""
+    rc, out = await _git("diff", "--shortstat", f"main..{branch}")
+    if rc != 0 or not out.strip():
+        return 0, 0
+    # Example: " 2 files changed, 30 insertions(+), 4 deletions(-)"
+    import re as _re
+    files = lines = 0
+    m = _re.search(r"(\d+) files? changed", out)
+    if m:
+        files = int(m.group(1))
+    inserts = sum(int(x) for x in _re.findall(r"(\d+) insertions?", out))
+    deletes = sum(int(x) for x in _re.findall(r"(\d+) deletions?", out))
+    lines = inserts + deletes
+    return files, lines
+
+
 async def run_streaming(
     task: str,
     cwd: Optional[Path] = None,
     role: Optional[str] = None,
+    max_files: Optional[int] = None,
+    max_lines: Optional[int] = None,
 ) -> AsyncIterator[dict]:
     """Yield progress events for a Claude Code run.
 
@@ -275,6 +294,26 @@ async def run_streaming(
         }
         return
 
+    files_changed, lines_changed = await _branch_diff_stats(branch)
+    if (max_files is not None and files_changed > max_files) or (
+        max_lines is not None and lines_changed > max_lines
+    ):
+        await _git("checkout", "main")
+        await _git("branch", "-D", branch)
+        yield {
+            "kind": "merge",
+            "status": "rolled-back",
+            "files_changed": files_changed,
+            "lines_changed": lines_changed,
+            "text": (
+                f"refused: {files_changed} files / {lines_changed} lines "
+                f"exceeds the small-change cap "
+                f"(max {max_files} files, {max_lines} lines). "
+                "Skhathi should review and run this manually."
+            ),
+        }
+        return
+
     ok, log = await _boot_check()
     if not ok:
         # Discard the branch entirely.
@@ -306,11 +345,18 @@ async def run_streaming(
             "text": f"could not fast-forward main: {mout[:400]}",
         }
         return
+    merged_branch = branch
     await _git("branch", "-d", branch)
     push_rc, push_out = await _git("push", "origin", "main")
     push_note = " (push failed)" if push_rc != 0 else ""
     yield {
         "kind": "merge",
         "status": "merged",
-        "text": f"merged to main{push_note}",
+        "files_changed": files_changed,
+        "lines_changed": lines_changed,
+        "branch": merged_branch,
+        "text": (
+            f"merged to main "
+            f"({files_changed} files / {lines_changed} lines){push_note}"
+        ),
     }

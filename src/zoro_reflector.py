@@ -27,8 +27,12 @@ from typing import Any
 
 import httpx
 
+import asyncio
+
+import zoro_claude_code
 import zoro_episodes
 import zoro_lessons
+import zoro_self_mod
 
 _REFLECT_HOUR = int(os.environ.get("ZORO_REFLECT_HOUR", "23"))
 _REFLECT_MODEL = "claude-haiku-4-5"
@@ -42,12 +46,15 @@ _SYSTEM_PROMPT = (
     "must be plain prose: no markdown, no bullets, no em-dashes, no "
     "ellipses. Two to four short sentences total.\n\n"
     "Structure: (1) one sentence on the day's pattern (what worked, "
-    "what struggled); (2) one sentence naming the top one or two things "
-    "you would improve about yourself and how (be concrete — name a "
-    "module or behaviour); (3) if there are missing resources, one "
-    "sentence asking Skhathi for them by name; otherwise omit. Begin "
-    "naturally (e.g. \"Today I...\"). End cleanly — do not summarise "
-    "yourself."
+    "what struggled); (2) if `recent_self_mods` is non-empty, one "
+    "sentence reporting what you tried autonomously yesterday and "
+    "whether it merged or was rolled back (be specific about the "
+    "outcome — Skhathi wants to know what changed about you); "
+    "(3) one sentence naming the top one or two things you would "
+    "improve next and how (be concrete — name a module or behaviour); "
+    "(4) if there are missing resources, one sentence asking Skhathi "
+    "for them by name; otherwise omit. Begin naturally "
+    "(e.g. \"Today I...\"). End cleanly — do not summarise yourself."
 )
 
 
@@ -180,6 +187,7 @@ def run_once() -> dict[str, Any]:
     if stats["success"] + stats["error"] + stats["aborted"] == 0 and not top:
         return {"status": "idle", "reason": "no episodes or lessons today"}
 
+    recent_self_mods = zoro_self_mod.recent_attempts(hours=24)
     llm_payload = {
         "episode_stats": stats,
         "top_lessons": [
@@ -192,6 +200,16 @@ def run_once() -> dict[str, Any]:
             for l in top
         ],
         "needs_resources": needs,
+        "recent_self_mods": [
+            {
+                "task": m.get("task", "")[:200],
+                "status": m.get("status"),
+                "files_changed": m.get("files_changed"),
+                "lines_changed": m.get("lines_changed"),
+                "notes": (m.get("notes") or "")[:200],
+            }
+            for m in recent_self_mods
+        ],
     }
     summary = _llm_summary(llm_payload)
     if not summary:
@@ -214,12 +232,96 @@ def run_once() -> dict[str, Any]:
         if lid:
             zoro_lessons.mark_status(int(lid), "reported")
 
+    # Autonomous self-mod: pick at most one small candidate and dispatch
+    # it. Best-effort — any failure is captured in zoro_self_mod_log.
+    auto_outcome = _maybe_autonomous_self_mod(top)
+
     return {
         "status": "wrote",
         "report_id": rid,
         "lessons_reported": len(top),
         "needs_resources": needs,
+        "autonomous": auto_outcome,
     }
+
+
+def _maybe_autonomous_self_mod(top_lessons: list[dict]) -> dict:
+    """Pick one small, concrete suggestion and run it through the
+    harness with the coder role and a small-change cap. Returns a small
+    diagnostic dict for run_once()'s return value."""
+    if not zoro_self_mod.autonomous_enabled():
+        return {"status": "skipped", "reason": "autonomous disabled or stood down"}
+    if zoro_self_mod.remaining_today() <= 0:
+        return {"status": "skipped", "reason": "daily cap reached"}
+
+    candidate = None
+    for l in top_lessons:
+        sug = (l.get("suggested_improvement") or "").strip()
+        needs = (l.get("needs_resource") or "").strip()
+        if needs:
+            # Needs new resource from Skhathi — not autonomously fixable.
+            continue
+        if not sug or len(sug) < 12:
+            continue
+        candidate = l
+        break
+    if candidate is None:
+        return {"status": "skipped", "reason": "no small concrete candidate"}
+
+    task = (
+        candidate.get("suggested_improvement", "").strip()
+        + "\n\nContext: this came from an autonomous reflection over a "
+        "recent failure. The relevant failure was: "
+        + (candidate.get("failure_summary") or "(unknown)")
+    )
+    lesson_id = candidate.get("id")
+    return asyncio.run(_run_autonomous_attempt(task, lesson_id))
+
+
+async def _run_autonomous_attempt(task: str, lesson_id: int | None) -> dict:
+    final: dict = {"status": "skipped", "reason": "no merge event"}
+    branch = None
+    try:
+        async for ev in zoro_claude_code.run_streaming(
+            task, role="coder",
+            max_files=zoro_self_mod.DEFAULT_MAX_FILES,
+            max_lines=zoro_self_mod.DEFAULT_MAX_LINES,
+        ):
+            if ev.get("kind") == "merge":
+                final = {
+                    "status": ev.get("status", ""),
+                    "text": ev.get("text", ""),
+                    "files_changed": ev.get("files_changed"),
+                    "lines_changed": ev.get("lines_changed"),
+                }
+                branch = ev.get("branch")
+            elif ev.get("kind") == "error":
+                final = {"status": "skipped", "reason": ev.get("text", "")}
+    except Exception as e:  # noqa: BLE001
+        final = {"status": "skipped", "reason": f"{type(e).__name__}: {e}"}
+
+    zoro_self_mod.log_attempt(
+        lesson_id=lesson_id,
+        role="coder",
+        task=task,
+        status=final.get("status") or "skipped",
+        files_changed=final.get("files_changed"),
+        lines_changed=final.get("lines_changed"),
+        branch=branch,
+        notes=final.get("reason") or final.get("text"),
+    )
+    if lesson_id:
+        outcome = final.get("status")
+        new_status = "fixed" if outcome == "merged" else (
+            "attempted" if outcome else "open"
+        )
+        zoro_lessons.mark_status(
+            int(lesson_id), new_status,
+            attempted_at=datetime.now(timezone.utc).isoformat(),
+            attempted_branch=branch,
+            attempted_result=outcome,
+        )
+    return final
 
 
 # --- Read side -------------------------------------------------------------
