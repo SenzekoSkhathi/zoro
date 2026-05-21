@@ -47,6 +47,7 @@ import zoro_claude_code
 import zoro_computer
 import zoro_corrections
 import zoro_episodes
+import zoro_lessons
 import zoro_github
 import zoro_google
 import zoro_memory
@@ -321,6 +322,13 @@ async def publish_now_playing(delay: float = 0.0) -> None:
     await publish_display("nowplaying", cur or {"empty": True})
 
 
+_NO_REFLECT_TOOLS = frozenset({
+    "read_my_source",
+    "read_my_notes",
+    "what_time_is_it",
+})
+
+
 def _logged(fn):
     """Wrap a function_tool method so every call writes a zoro_episodes row.
 
@@ -399,6 +407,24 @@ def _logged(fn):
                         "result": _result_str,
                         "ts": time.monotonic(),
                     })
+                # Failed episodes get a reflection. The reflector calls
+                # Claude Haiku + writes to zoro_lessons, both off the
+                # voice loop. Don't reflect on reflection-internal tools
+                # to avoid loops or noisy lessons.
+                if (
+                    eid
+                    and _outcome == "error"
+                    and tool_name not in _NO_REFLECT_TOOLS
+                ):
+                    await asyncio.to_thread(
+                        zoro_lessons.reflect_on_episode,
+                        episode_id=eid,
+                        tool=tool_name,
+                        task=_task_summary,
+                        outcome=_outcome,
+                        result_summary=_result_str,
+                        error=_err,
+                    )
 
             asyncio.create_task(_persist())
 
