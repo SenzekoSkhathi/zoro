@@ -47,6 +47,27 @@ def _section_scripts() -> list[str]:
     return lines
 
 
+def _section_agents() -> list[str]:
+    agents_dir = ROOT / "agents"
+    if not agents_dir.exists():
+        return []
+    lines = ["", "## Sub-agents (agents/)"]
+    for p in sorted(agents_dir.glob("*.md")):
+        body = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        title = ""
+        desc = ""
+        for line in body:
+            s = line.strip()
+            if not title and s.startswith("#"):
+                title = s.lstrip("# ").strip()
+                continue
+            if title and not desc and s:
+                desc = s
+                break
+        lines.append(f"- `agents/{p.name}` — {title}: {desc}")
+    return lines
+
+
 def _section_other() -> list[str]:
     return [
         "",
@@ -69,7 +90,14 @@ def build() -> str:
         "`ask_claude_code` tool.",
         "",
     ]
-    parts = header + _section_src() + _section_scripts() + _section_other() + [""]
+    parts = (
+        header
+        + _section_src()
+        + _section_agents()
+        + _section_scripts()
+        + _section_other()
+        + [""]
+    )
     return "\n".join(parts)
 
 

@@ -23,12 +23,18 @@ list below to know which file to point Claude Code at via the
 - `src/zoro_safety.py` — Shared safety / gating layer for Zoro's autonomous behaviour.
 - `src/zoro_shell.py` — PowerShell access + Windows app launching.
 - `src/zoro_spotify.py` — Spotify Web API access using a cached OAuth token.
+- `src/zoro_subagents.py` — Sub-agent loader.
 - `src/zoro_supervisor.py` — Zoro always-on supervisor.
 - `src/zoro_tasks.py` — Durable task queue — 'do this thing later'.
 - `src/zoro_tools.py` — Pure helper logic for Zoro's tools (no LiveKit imports).
 - `src/zoro_whatsapp.py` — WhatsApp access via the local Node bridge (services/whatsapp).
 - `src/zoro_youtube.py` — YouTube access: search + transcript fetch + Claude-powered summary.
 - `src/wake_service.py` — Zoro on-device wake-word service.
+
+## Sub-agents (agents/)
+- `agents/agent_smith.md` — Agent Smith: Sub-agent author. Writes new role files under `agents/` when Zoro decides she needs a new specialist.
+- `agents/coder.md` — Coder: General-purpose code editor for the Zoro repository. Makes focused, well-scoped changes that pass the boot check.
+- `agents/researcher.md` — Researcher: Read-only research assistant. Investigates topics, reads source, searches the web, and reports findings in plain prose. Never writes files.
 
 ## Scripts (scripts/)
 - `scripts/build_self_map.py`

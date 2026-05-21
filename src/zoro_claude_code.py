@@ -75,8 +75,30 @@ async def _rebuild_self_map() -> None:
     await proc.wait()
 
 
+# Files autonomous self-mod must never alter. The harness, the safety
+# layer, and Zoro's identity. A diff that touches any of these is
+# rolled back regardless of boot-check outcome. The user can still
+# edit them by hand on main.
+_PROTECTED_PATHS = frozenset({
+    "src/zoro_safety.py",
+    "src/zoro_claude_code.py",
+    "src/zoro_prompt.py",
+})
+
+
+async def _branch_touches_protected(branch: str) -> tuple[bool, list[str]]:
+    rc, out = await _git("diff", "--name-only", f"main..{branch}")
+    if rc != 0:
+        return False, []
+    changed = [p.strip().replace("\\", "/") for p in out.splitlines() if p.strip()]
+    hit = sorted(p for p in changed if p in _PROTECTED_PATHS)
+    return bool(hit), hit
+
+
 async def run_streaming(
-    task: str, cwd: Optional[Path] = None
+    task: str,
+    cwd: Optional[Path] = None,
+    role: Optional[str] = None,
 ) -> AsyncIterator[dict]:
     """Yield progress events for a Claude Code run.
 
@@ -133,6 +155,21 @@ async def run_streaming(
         "did (or, if you genuinely could not proceed, what the blocker "
         "was). Do not narrate your tool use in the final reply."
     )
+    disallowed = ["AskUserQuestion", "ExitPlanMode"]
+    if role:
+        try:
+            import zoro_subagents
+            sa = zoro_subagents.load_agent(role)
+        except Exception:  # noqa: BLE001
+            sa = None
+        if sa is not None:
+            headless_addendum = headless_addendum + "\n\n" + sa.body
+            disallowed = sa.disallowed_tools
+        else:
+            yield {
+                "kind": "narration",
+                "text": f"(unknown sub-agent role '{role}', running ungated)",
+            }
     proc = await asyncio.create_subprocess_exec(
         _claude_bin(),
         "-p",
@@ -144,7 +181,7 @@ async def run_streaming(
         "--append-system-prompt",
         headless_addendum,
         "--disallowedTools",
-        "AskUserQuestion,ExitPlanMode",
+        ",".join(disallowed),
         cwd=str(cwd or ZORO_ROOT),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -217,6 +254,27 @@ async def run_streaming(
             }
             return
 
+    # Commit anything still uncommitted so the diff check below sees
+    # the full set of changes Claude made.
+    if await _has_changes():
+        await _git("add", "-A")
+        await _git("commit", "-m", f"zoro self-mod (pre-check): {task[:64]}")
+
+    touches_protected, hit = await _branch_touches_protected(branch)
+    if touches_protected:
+        await _git("checkout", "main")
+        await _git("branch", "-D", branch)
+        yield {
+            "kind": "merge",
+            "status": "rolled-back",
+            "text": (
+                "refused: this change touched protected files "
+                + ", ".join(hit)
+                + ". Skhathi must edit those by hand."
+            ),
+        }
+        return
+
     ok, log = await _boot_check()
     if not ok:
         # Discard the branch entirely.
@@ -229,13 +287,6 @@ async def run_streaming(
             "text": f"boot check failed, rolled back: {log[:400]}",
         }
         return
-
-    # Commit any uncommitted changes Claude left behind.
-    if await _has_changes():
-        await _git("add", "-A")
-        await _git(
-            "commit", "-m", f"zoro self-mod: {task[:72]}",
-        )
 
     # Refresh the self-map so future sessions see any new modules.
     await _rebuild_self_map()

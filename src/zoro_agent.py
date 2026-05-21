@@ -267,7 +267,9 @@ async def _speak_or_queue(session, text: str) -> None:
         print(f"[zoro] claude announce skipped: {e}", flush=True)
 
 
-async def _run_claude_task(task: str, session=None) -> None:
+async def _run_claude_task(
+    task: str, session=None, role: str | None = None,
+) -> None:
     """Stream a Claude Code session into the web view as it runs, then
     speak a one-line summary when it finishes.
 
@@ -276,13 +278,14 @@ async def _run_claude_task(task: str, session=None) -> None:
     """
     state: dict = {
         "task": task,
+        "role": role or "",
         "status": "running",
         "lines": [],
         "result": "",
     }
     await publish_display("claude", state)
     try:
-        async for ev in zoro_claude_code.run_streaming(task):
+        async for ev in zoro_claude_code.run_streaming(task, role=role):
             kind = ev["kind"]
             if kind == "result":
                 state["status"] = "done" if ev.get("ok") else "failed"
@@ -1493,14 +1496,17 @@ class Zoro(Agent):
     @function_tool()
     @_logged
     async def ask_claude_code(
-        self, context: RunContext, task: str
+        self, context: RunContext, task: str, role: str = ""
     ) -> str:
         """Hand a coding/editing task off to Claude Code in the Zoro repo.
 
-        Fire-and-forget: the spawned `claude` CLI session runs with
-        permissions bypassed in `c:/Users/senze/Downloads/zoro`, streams
-        its progress to a web card, and the user reviews the diff
-        afterwards.
+        Fire-and-forget: the spawned `claude` CLI session runs in
+        `c:/Users/senze/Downloads/zoro` on a fresh branch off main, with
+        permissions bypassed. After it finishes, a boot check runs and
+        the branch is auto-merged to main if it passes, or rolled back
+        if it fails. Touching protected files (zoro_safety,
+        zoro_claude_code, zoro_prompt) is always rolled back. Progress
+        streams to a web card.
 
         Use for things Zoro herself can't do: writing/refactoring code,
         adding features, fixing bugs in the repo. NOT for trivial file
@@ -1510,11 +1516,69 @@ class Zoro(Agent):
         Args:
             task: Plain-language task, e.g. "add a dark-mode toggle to
                 the web app" or "fix the import error in zoro_proactive".
+            role: Optional sub-agent role name (e.g. "researcher",
+                "coder", "agent_smith"). When set, the matching
+                `agents/<role>.md` system prompt and tool whitelist are
+                applied. Call list_sub_agents to discover available
+                roles. Leave empty for a general-purpose run.
         """
-        asyncio.create_task(_run_claude_task(task, context.session))
+        asyncio.create_task(_run_claude_task(
+            task, context.session, role=(role.strip() or None),
+        ))
+        suffix = f" using the {role.strip()} role" if role.strip() else ""
         return (
-            "I'll have Claude work on that — watch the screen for "
-            "progress. I'll let you know when it's done."
+            f"I'll have Claude work on that{suffix} — watch the screen "
+            "for progress. I'll let you know when it's done."
+        )
+
+    @function_tool()
+    @_logged
+    async def list_sub_agents(self, context: RunContext) -> str:
+        """List your available sub-agent roles and what each one does.
+
+        Use this when Skhathi asks "what sub-agents do you have" or
+        before you decide which role to pass to ask_claude_code.
+        """
+        import zoro_subagents
+        agents = await asyncio.to_thread(zoro_subagents.list_agents)
+        if not agents:
+            return "I have no sub-agents yet."
+        lines = [f"{a.name}: {a.description}" for a in agents]
+        return " | ".join(lines)
+
+    @function_tool()
+    @_logged
+    async def build_sub_agent(
+        self, context: RunContext, name: str, description: str
+    ) -> str:
+        """Spawn the agent_smith sub-agent to author a new role file
+        under `agents/`.
+
+        Use this when you've identified a recurring task that would
+        benefit from a dedicated specialist (e.g. a writer, a
+        diagnostician, a summariser).
+
+        Args:
+            name: Lower_snake_case identifier, single word preferred
+                (e.g. "diagnostician").
+            description: One-line purpose for the new role; Agent Smith
+                will turn this into a full prompt.
+        """
+        clean = (name or "").strip().lower().replace(" ", "_")
+        if not clean.replace("_", "").isalnum() or not clean:
+            return "That name isn't valid — use lower_snake_case letters and digits only."
+        task = (
+            f"Create a new sub-agent named '{clean}'. Purpose: "
+            f"{description.strip()}. Follow the format of the existing "
+            f"agents/researcher.md and agents/coder.md exactly. Write "
+            f"only the file agents/{clean}.md."
+        )
+        asyncio.create_task(_run_claude_task(
+            task, context.session, role="agent_smith",
+        ))
+        return (
+            f"I'll have Agent Smith draft the new {clean} sub-agent. "
+            "Watch the screen for progress."
         )
 
     @function_tool()
