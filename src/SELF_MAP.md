@@ -14,9 +14,11 @@ list below to know which file to point Claude Code at via the
 - `src/zoro_episodes.py` — Episodic outcome log — Phase 1 telemetry foundation.
 - `src/zoro_github.py` — GitHub access via the gh CLI.
 - `src/zoro_google.py` — Read-only Google (Calendar + Gmail) access using the token that
+- `src/zoro_lessons.py` — Reflection layer — turn failed (and notable successful) episodes into lessons.
 - `src/zoro_memory.py` — Zoro's long-term memory — Supabase (PostgREST) access.
 - `src/zoro_proactive.py` — Zoro's proactive ambient loop — she speaks first.
 - `src/zoro_prompt.py` — Zoro's identity / operating spec — the shared system prompt for Claude.
+- `src/zoro_reflector.py` — Nightly self-improvement loop.
 - `src/zoro_retry.py` — Bounded retry for transient network failures on idempotent tool reads.
 - `src/zoro_safety.py` — Shared safety / gating layer for Zoro's autonomous behaviour.
 - `src/zoro_shell.py` — PowerShell access + Windows app launching.
@@ -33,8 +35,10 @@ list below to know which file to point Claude Code at via the
 - `scripts/install_autostart.ps1`
 - `scripts/uninstall_autostart.ps1`
 - `scripts/zoro_autostart.vbs`
+- `scripts/zoro_daily_reports.sql`
 - `scripts/zoro_episodes.sql`
 - `scripts/zoro_flakiness.py`
+- `scripts/zoro_lessons.sql`
 - `scripts/zoro_spotify_auth.py`
 - `scripts/zoro_tasks.sql`
 

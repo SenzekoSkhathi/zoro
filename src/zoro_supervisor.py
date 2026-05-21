@@ -74,6 +74,7 @@ def _services() -> dict[str, tuple[list[str], Path]]:
         "agent": ([str(PY), "src/zoro_agent.py", "start"], ROOT),
         "wake": ([str(PY), "src/wake_service.py"], ROOT),
         "proactive": ([str(PY), "src/zoro_proactive.py"], ROOT),
+        "reflector": ([str(PY), "src/zoro_reflector.py"], ROOT),
         "web": ([_npm(), "run", "dev"], WEB),
         # WhatsApp bridge: drives WhatsApp Web via Puppeteer, exposes a
         # local HTTP API. First run needs an interactive QR scan from a

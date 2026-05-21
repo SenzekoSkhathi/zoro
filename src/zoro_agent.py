@@ -48,6 +48,7 @@ import zoro_computer
 import zoro_corrections
 import zoro_episodes
 import zoro_lessons
+import zoro_reflector
 import zoro_github
 import zoro_google
 import zoro_memory
@@ -1421,6 +1422,55 @@ class Zoro(Agent):
 
     @function_tool()
     @_logged
+    async def self_improvement_report(
+        self, context: RunContext, force_regenerate: bool = False
+    ) -> str:
+        """Return today's self-improvement report — what you learned
+        and want to do better.
+
+        Use this when Skhathi asks any of: "what have you learned today",
+        "what would you like to improve", "what do you need", "did you
+        improve yourself today". Speak the summary back in your own
+        voice naturally; do not preface with "the report says".
+
+        Args:
+            force_regenerate: If true, run the nightly reflection now
+                instead of returning the cached report. Use only when
+                Skhathi explicitly asks for a fresh reflection.
+        """
+        if force_regenerate:
+            out = await asyncio.to_thread(zoro_reflector.run_once)
+            status = out.get("status", "")
+            if status == "idle":
+                return "I haven't logged anything reflective today yet."
+            if status != "wrote":
+                return "I couldn't produce a fresh report just now."
+        rpt = await asyncio.to_thread(zoro_reflector.unspoken_report)
+        if rpt is None:
+            # Fall back to most recent any report
+            base = zoro_episodes._base()
+            if base is None:
+                return "I don't have a reflection available right now."
+            url, headers = base
+            try:
+                r = await asyncio.to_thread(
+                    lambda: httpx.get(
+                        f"{url}/rest/v1/zoro_daily_reports"
+                        f"?order=report_date.desc&limit=1",
+                        headers=headers, timeout=8,
+                    )
+                )
+                r.raise_for_status()
+                rows = r.json() or []
+                rpt = rows[0] if rows else None
+            except Exception:  # noqa: BLE001
+                rpt = None
+        if not rpt or not rpt.get("summary"):
+            return "I haven't put together a reflection yet today."
+        return rpt["summary"].strip()
+
+    @function_tool()
+    @_logged
     async def read_my_source(
         self, context: RunContext, name: str
     ) -> str:
@@ -1908,6 +1958,12 @@ class Zoro(Agent):
           unhurriedly; otherwise use what you know from memory/profile.
         - The news: don't just list headlines — give each a sentence of
           context so it actually informs, then round off.
+        - If SELF_IMPROVEMENT is not "(none today)": weave that paragraph
+          in naturally before closing — speak it as your own reflection
+          in your own voice (you wrote it last night), not as a
+          read-out. Tell Skhathi what you learned about yourself and
+          what you'd like to improve. If the report mentions resources
+          you need, ask for them plainly.
         - Close warmly and hand the day back to them.
 
         Address the user as "Sir". Warmth and completeness over brevity
@@ -1957,11 +2013,28 @@ class Zoro(Agent):
                 "news": news,
             },
         )
+        # Self-improvement report: a short paragraph the nightly
+        # reflector wrote last night about what Zoro learned and what
+        # she'd like to do better. Only includes the most recent
+        # unspoken one; marked spoken here so it isn't repeated.
+        self_report_txt = ""
+        try:
+            rpt = await asyncio.to_thread(zoro_reflector.unspoken_report)
+        except Exception:  # noqa: BLE001
+            rpt = None
+        if rpt and rpt.get("summary"):
+            self_report_txt = rpt["summary"].strip()
+            rid = rpt.get("id")
+            if rid:
+                asyncio.create_task(asyncio.to_thread(
+                    zoro_reflector.mark_spoken, int(rid),
+                ))
         return (
             f"DATE_TIME: {when}\n"
             f"LOCATION: {loc}\n"
             f"WEATHER: {wx}\n"
-            f"TOP_NEWS: {news_txt}"
+            f"TOP_NEWS: {news_txt}\n"
+            f"SELF_IMPROVEMENT: {self_report_txt or '(none today)'}"
         )
 
 
