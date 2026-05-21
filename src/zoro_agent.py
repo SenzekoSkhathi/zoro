@@ -228,15 +228,24 @@ def _summarise_claude_result(state: dict) -> str:
     text stays on the card for the user to read.
     """
     raw = (state.get("result") or "").strip().replace("\n", " ")
+    merge = state.get("merge") or ""
     if state.get("status") == "failed":
         snippet = raw[:140] + ("…" if len(raw) > 140 else "")
         return f"Claude couldn't finish: {snippet}" if snippet else (
             "Claude hit an error."
         )
+    if merge == "rolled-back":
+        return (
+            "Claude's change broke my boot check, so I rolled it back. "
+            "Nothing was merged, Sir."
+        )
+    if merge == "no-changes":
+        return "Claude ran but didn't change anything."
     snippet = raw[:200] + ("…" if len(raw) > 200 else "")
+    suffix = " Merged into main." if merge == "merged" else ""
     if snippet:
-        return f"Claude finished. {snippet}"
-    return "Claude is done."
+        return f"Claude finished. {snippet}{suffix}"
+    return "Claude is done." + suffix
 
 
 async def _speak_or_queue(session, text: str) -> None:
@@ -283,6 +292,9 @@ async def _run_claude_task(task: str, session=None) -> None:
                 state["lines"].append(f"→ {ev['text']}")
             elif kind == "narration":
                 state["lines"].append(ev["text"])
+            elif kind == "merge":
+                state["merge"] = ev.get("status", "")
+                state["lines"].append(f"⎇ {ev.get('text', '')}")
             state["lines"] = state["lines"][-30:]
             await publish_display("claude", state)
     except Exception as e:  # noqa: BLE001 - background, must not crash
