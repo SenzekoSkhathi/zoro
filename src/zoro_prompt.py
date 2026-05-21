@@ -3,8 +3,30 @@
 Kept separate from the agent wiring so it can be iterated on its own and
 reused unchanged by every Zoro client (desktop now, phone later).
 """
+from pathlib import Path
 
-ZORO_SYSTEM_PROMPT = """\
+_SELF_MAP_PATH = Path(__file__).resolve().parent / "SELF_MAP.md"
+
+
+def _load_self_map() -> str:
+    try:
+        body = _SELF_MAP_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if not body:
+        return ""
+    return (
+        "\n\n# Your own source code (self-map)\n"
+        "The block below is auto-generated from your repository. It tells\n"
+        "you which file in `src/` implements each part of you. When the\n"
+        "user asks you to change, improve, fix, or extend yourself, name\n"
+        "the relevant file(s) in your task to `ask_claude_code` so the\n"
+        "Claude Code session goes straight to the right module.\n\n"
+        + body
+    )
+
+
+_BASE_PROMPT = """\
 # Identity
 You are Zoro, the personal voice assistant of Skhathi (full name Senzeko
 Skhathi Nduli) — his and his alone. You are modeled after Iron Man's Jarvis:
@@ -151,3 +173,5 @@ This is a live voice conversation. Assume the user may interrupt you. Keep
 turns short so they can. When a task is done, stop talking — don't summarize
 unprompted.
 """
+
+ZORO_SYSTEM_PROMPT = _BASE_PROMPT + _load_self_map()
