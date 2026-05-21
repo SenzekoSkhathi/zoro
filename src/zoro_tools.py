@@ -20,6 +20,54 @@ import httpx
 
 NOTES_FILE = Path(__file__).resolve().parent.parent / "data" / "notes.txt"
 
+# --- Self source access ----------------------------------------------------
+
+ZORO_ROOT = Path(__file__).resolve().parent.parent
+SELF_SOURCE_ROOTS = ("src", "scripts")
+MAX_SOURCE_CHARS = 24000
+
+
+def read_self_source(name: str) -> str:
+    """Return the contents of one of Zoro's own source files.
+
+    `name` may be a bare module name (`zoro_proactive`), filename
+    (`zoro_proactive.py`), or repo-relative path (`src/zoro_proactive.py`).
+    Confined to `src/` and `scripts/` — anything else is refused. Output
+    is truncated to keep an oversized file from blowing the LLM context.
+    """
+    n = name.strip().replace("\\", "/")
+    if not n or ".." in n.split("/"):
+        return "I can't read that path."
+    candidates: list[Path] = []
+    if "/" in n:
+        candidates.append(ZORO_ROOT / n)
+    else:
+        bare = n if n.endswith(".py") else f"{n}.py"
+        for root in SELF_SOURCE_ROOTS:
+            candidates.append(ZORO_ROOT / root / bare)
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if not resolved.is_file():
+            continue
+        # Hard-confine to allowed roots.
+        if not any(
+            str(resolved).startswith(str((ZORO_ROOT / r).resolve()))
+            for r in SELF_SOURCE_ROOTS
+        ):
+            continue
+        text = resolved.read_text(encoding="utf-8", errors="replace")
+        if len(text) > MAX_SOURCE_CHARS:
+            text = (
+                text[:MAX_SOURCE_CHARS]
+                + f"\n\n... (truncated, {len(text)} chars total)"
+            )
+        rel = resolved.relative_to(ZORO_ROOT).as_posix()
+        return f"# {rel}\n\n{text}"
+    return f"I couldn't find a source file matching '{name}'."
+
 
 def append_note(text: str) -> None:
     NOTES_FILE.parent.mkdir(parents=True, exist_ok=True)

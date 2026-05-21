@@ -1395,6 +1395,27 @@ class Zoro(Agent):
 
     @function_tool()
     @_logged
+    async def read_my_source(
+        self, context: RunContext, name: str
+    ) -> str:
+        """Read one of your own source files so you can discuss or reason
+        about your code before deciding to change it.
+
+        Use this when the user asks about how you work, what a module
+        does, or before you spawn Claude Code so you can name the
+        exact file and the change you want. Do NOT read the source aloud
+        — summarise in a sentence or two.
+
+        Args:
+            name: A bare module name (e.g. "zoro_proactive"), filename
+                ("zoro_proactive.py"), or repo-relative path
+                ("src/zoro_proactive.py"). Search is confined to src/
+                and scripts/.
+        """
+        return await asyncio.to_thread(zoro_tools.read_self_source, name)
+
+    @function_tool()
+    @_logged
     async def ask_claude_code(
         self, context: RunContext, task: str
     ) -> str:
