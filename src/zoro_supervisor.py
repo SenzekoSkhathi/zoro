@@ -298,6 +298,52 @@ def _run_tray(sup: Supervisor) -> None:
 
 _SINGLETON_PORT = 8799
 
+# Hour (local, 0-23) for the nightly self-update check. Kept low-traffic so
+# the brief child restart after an update lands when Zoro is least likely
+# to be mid-conversation.
+_UPDATE_HOUR = int(os.environ.get("ZORO_UPDATE_HOUR", "4"))
+
+
+def _run_auto_update(reason: str) -> str:
+    """Pull + boot-check the backend before (re)launching children. Returns
+    the status string; never raises (updates must not block startup)."""
+    try:
+        import zoro_updater
+
+        result = zoro_updater.auto_update()
+        status = result.get("status", "unknown")
+        print(f"[supervisor] auto-update ({reason}): {result}", flush=True)
+        return status
+    except Exception as e:  # noqa: BLE001 - an update failure must not stop Zoro
+        print(f"[supervisor] auto-update error ({reason}): {e}", flush=True)
+        return "error"
+
+
+def _nightly_updater(sup: "Supervisor") -> None:
+    """Once a day at _UPDATE_HOUR, pull origin/main; if new code landed and
+    passed its boot-check, restart the children onto it. Daemon thread."""
+    while True:
+        now = time.localtime()
+        secs = (
+            (_UPDATE_HOUR - now.tm_hour) % 24 * 3600
+            - now.tm_min * 60
+            - now.tm_sec
+        )
+        if secs <= 0:
+            secs += 86400
+        time.sleep(secs)
+        status = _run_auto_update("nightly")
+        if status == "updated":
+            print("[supervisor] new code adopted — restarting children",
+                  flush=True)
+            try:
+                sup.restart_all()
+            except Exception as e:  # noqa: BLE001
+                print(f"[supervisor] post-update restart failed: {e}",
+                      flush=True)
+        # Guard against a fast loop if the clock math ever lands us early.
+        time.sleep(3600)
+
 
 def _acquire_singleton():
     """Bind a localhost port as a single-instance lock. If another
@@ -326,6 +372,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Pull the latest backend BEFORE launching children, so a relaunch
+    # always runs the newest known-good code. Safe by construction: skips on
+    # a dirty/diverged tree and rolls back any commit that fails boot-check.
+    _run_auto_update("startup")
+
     sup = Supervisor()
 
     if args.no_tray:
@@ -338,12 +389,18 @@ def main() -> None:
             signal.signal(signal.SIGTERM, _sig)
         except (ValueError, OSError):
             pass
+        threading.Thread(
+            target=_nightly_updater, args=(sup,), daemon=True
+        ).start()
         sup.run_forever()
         return
 
     # tray mode: supervisor loop in a daemon thread, tray on main thread
     sup.start_all()
     threading.Thread(target=sup._watch, daemon=True).start()
+    threading.Thread(
+        target=_nightly_updater, args=(sup,), daemon=True
+    ).start()
     try:
         _run_tray(sup)
     finally:
