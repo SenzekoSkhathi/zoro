@@ -151,7 +151,16 @@ export default function Home() {
   const [audioPrimed, setAudioPrimed] = useState(false);
   useEffect(() => {
     const w = window as unknown as Record<string, unknown>;
-    if ("__TAURI_INTERNALS__" in w || "__TAURI__" in w) setAudioPrimed(true);
+    // Tauri loads our hosted URL as remote content, which doesn't reliably
+    // get the __TAURI__ global injected — so the native shell also tags its
+    // webview with a custom user-agent ("ZoroShell"). Check all three.
+    const ua = navigator.userAgent || "";
+    const inShell =
+      "__TAURI_INTERNALS__" in w ||
+      "__TAURI__" in w ||
+      ua.includes("ZoroShell") ||
+      new URLSearchParams(window.location.search).get("shell") === "tauri";
+    if (inShell) setAudioPrimed(true);
   }, []);
   const primeAudio = useCallback(() => {
     try {
