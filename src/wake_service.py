@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 import websockets
+from websockets.exceptions import ConnectionClosed
 from openwakeword.model import Model
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -58,6 +59,7 @@ def _summon_app(flag: str = "--wake") -> None:
     """
     exe = _app_exe()
     if exe is None:
+        print("[wake] summon skipped — desktop app not found", flush=True)
         return
     try:
         subprocess.Popen(
@@ -67,8 +69,9 @@ def _summon_app(flag: str = "--wake") -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-    except OSError:
-        pass
+        print(f"[wake] summoned desktop app ({flag})", flush=True)
+    except OSError as e:
+        print(f"[wake] summon failed: {e}", flush=True)
 
 # Default to the trained custom "hey_zoro" model if present, else fall back to
 # openWakeWord's built-in "hey_jarvis". Override via the env var if needed.
@@ -84,8 +87,53 @@ PORT = 8765
 SAMPLE_RATE = 16000
 FRAME = 1280                # 80 ms @ 16 kHz — openWakeWord's expected chunk
 
+# A call-pause is a *lease*, not a latch: the browser refreshes it every few
+# seconds while a call is live, and it auto-expires PAUSE_TTL_S after the last
+# refresh. This is the whole robustness story — a client that crashes, has its
+# ws connection churn (the hosted HTTPS UI's ws:// to loopback drops without a
+# close frame), or closes its tab mid-call can no longer leave the mic
+# permanently deaf, because the lease simply lapses and listening resumes.
+# Must comfortably exceed the browser's refresh interval (~4 s).
+PAUSE_TTL_S = 8.0
+
 clients: set = set()
-paused = threading.Event()
+# Deadline (time.monotonic) until which the call-pause lease mutes the mic; 0
+# means no active lease. The tray's "Pause listening" is a *separate*, sticky
+# mute (no TTL) so the user can intentionally silence Zoro indefinitely.
+_pause_until = 0.0
+_muted_sticky = False
+_pause_logged = False      # so per-refresh leases don't spam the log
+
+
+def _set_call_pause(active: bool) -> None:
+    """Refresh (active) or clear (active=False) the auto-expiring call-pause
+    lease. Logs only on the leading edge so keepalive refreshes stay quiet."""
+    global _pause_until, _pause_logged
+    if active:
+        _pause_until = time.monotonic() + PAUSE_TTL_S
+        if not _pause_logged:
+            print("[wake] paused (call active)", flush=True)
+            _pause_logged = True
+    else:
+        _pause_until = 0.0
+        if _pause_logged:
+            print("[wake] resumed (call ended)", flush=True)
+            _pause_logged = False
+
+
+def _is_muted() -> bool:
+    """True while the mic should ignore audio: either the tray's sticky mute
+    or a live call-pause lease. A lease that lapses without an explicit resume
+    (client vanished) resumes listening on its own."""
+    global _pause_logged
+    if _muted_sticky:
+        return True
+    if time.monotonic() < _pause_until:
+        return True
+    if _pause_logged:
+        print("[wake] resumed (pause lease expired)", flush=True)
+        _pause_logged = False
+    return False
 
 
 async def _handler(ws):
@@ -98,11 +146,19 @@ async def _handler(ws):
             except (ValueError, AttributeError):
                 continue
             if cmd == "pause":
-                paused.set()
-                print("[wake] paused (call active)")
+                # Lease refresh: the browser sends this on call start and then
+                # repeatedly while the call is live (see useWakeService).
+                _set_call_pause(True)
             elif cmd == "resume":
-                paused.clear()
-                print("[wake] resumed (listening)")
+                _set_call_pause(False)
+            elif cmd == "mute":
+                # Tray "Pause listening": sticky, indefinite, user-intentional.
+                global _muted_sticky
+                _muted_sticky = True
+                print("[wake] muted (tray)")
+            elif cmd == "unmute":
+                _muted_sticky = False
+                print("[wake] unmuted (tray)")
             elif cmd == "proactive":
                 # The proactive service asks us to wake the browser exactly
                 # as a spoken wake word would, so it connects and the agent
@@ -113,8 +169,16 @@ async def _handler(ws):
                 for c in list(clients):
                     if c is not ws:
                         await c.send(msg)
+    except ConnectionClosed:
+        # The hosted UI's ws:// to loopback frequently drops without a close
+        # handshake; that's expected, not an error. Swallow it so we don't log
+        # a "connection handler failed" traceback on every reconnect.
+        pass
     finally:
         clients.discard(ws)
+        # No pause cleanup needed here anymore: the call-pause is a lease that
+        # lapses on its own (PAUSE_TTL_S), so a vanished client can't leave the
+        # mic deaf even if it never sent a resume.
         print(f"[wake] client disconnected ({len(clients)} total)")
 
 
@@ -141,7 +205,7 @@ def _audio_loop(loop):
     ) as stream:
         while True:
             data, _ = stream.read(FRAME)
-            if paused.is_set():
+            if _is_muted():
                 continue
             scores = model.predict(np.squeeze(data))
             # Use whatever key the model exposes (a custom .onnx is keyed by
