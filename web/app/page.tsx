@@ -11,9 +11,12 @@ import {
 } from "@livekit/components-react";
 import type { LocalAudioTrack } from "livekit-client";
 import { useWakeService } from "@/hooks/useWakeService";
+import { useTelemetry } from "@/hooks/useTelemetry";
 import { Orb, type OrbMode } from "@/components/Orb";
 import { ZoroDisplay } from "@/components/ZoroDisplay";
 import { Transcript } from "@/components/Transcript";
+import { InstrumentRail } from "@/components/InstrumentRail";
+import { ToolTicker } from "@/components/ToolTicker";
 import styles from "./page.module.css";
 
 const USER_ACCENT = "#3fd0ff"; // cyan — you are speaking
@@ -196,9 +199,15 @@ export default function Home() {
   const faceMode: OrbMode =
     phase === "connecting" ? "connecting" : phase === "idle" ? "listening" : "idle";
 
+  // Ambient self-telemetry — polled here at the page root so the
+  // instrument rail stays live across every phase (even idle), making the
+  // app read as a running system rather than a dormant page.
+  const telemetry = useTelemetry();
+
   return (
     <main className={styles.main}>
       <HudFrame phase={phase} online={serviceOnline} />
+      <InstrumentRail data={telemetry} />
 
       {phase !== "active" && <Orb mode={faceMode} />}
 
@@ -368,6 +377,7 @@ function ZoroConversation({
       {!contentShown && (
         <p className={styles.state}>{state ?? "connecting"}</p>
       )}
+      <ToolTicker />
       <ZoroDisplay onActiveChange={setCardActive} />
       <Transcript onActiveChange={setChatActive} />
     </div>

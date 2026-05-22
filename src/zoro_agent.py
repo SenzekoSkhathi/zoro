@@ -376,6 +376,18 @@ _NO_REFLECT_TOOLS = frozenset({
 })
 
 
+async def publish_tool_event(name: str, phase: str, ms: int | None = None) -> None:
+    """Emit a live tool-invocation frame for the web HUD's activity ticker.
+
+    phase is "active" (just started) | "ok" | "err" (finished). The web
+    view shows the current tool and its outcome so the UI reflects what
+    Zoro is actually doing in real time. Best-effort like all display."""
+    data: dict = {"name": name, "phase": phase}
+    if ms is not None:
+        data["ms"] = ms
+    await publish_display("tool", data)
+
+
 def _logged(fn):
     """Wrap a function_tool method so every call writes a zoro_episodes row.
 
@@ -393,6 +405,8 @@ def _logged(fn):
         outcome = "success"
         err: str | None = None
         result: object = None
+        # Live HUD ticker: announce the tool firing before we run it.
+        asyncio.create_task(publish_tool_event(tool_name, "active"))
         try:
             result = await fn(self, context, *args, **kwargs)
             if isinstance(result, str) and zoro_episodes.looks_like_failure(result):
@@ -404,6 +418,9 @@ def _logged(fn):
             raise
         finally:
             latency_ms = int((time.monotonic() - t0) * 1000)
+            asyncio.create_task(publish_tool_event(
+                tool_name, "err" if outcome == "error" else "ok", latency_ms
+            ))
             try:
                 bound = sig.bind_partial(self, context, *args, **kwargs)
                 bound.apply_defaults()
