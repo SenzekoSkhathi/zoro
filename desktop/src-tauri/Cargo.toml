@@ -1,0 +1,22 @@
+[package]
+name = "zoro-desktop"
+version = "0.1.0"
+description = "Zoro desktop shell"
+authors = ["Skhathi"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+
+[profile.release]
+# Smaller, faster-to-ship binary for a thin shell.
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

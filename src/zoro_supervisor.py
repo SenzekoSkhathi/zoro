@@ -75,7 +75,12 @@ def _services() -> dict[str, tuple[list[str], Path]]:
         "wake": ([str(PY), "src/wake_service.py"], ROOT),
         "proactive": ([str(PY), "src/zoro_proactive.py"], ROOT),
         "reflector": ([str(PY), "src/zoro_reflector.py"], ROOT),
-        "web": ([_npm(), "run", "dev"], WEB),
+        # NOTE: the local Next dev server (localhost:3000) is intentionally
+        # NOT managed anymore. The desktop app loads the hosted UI from
+        # Vercel, and a local browser tab on :3000 was connecting to the wake
+        # service and pausing it (the Tauri app can't send resume over the
+        # blocked ws://). Run `cd web && npm run dev` by hand if you ever need
+        # to debug the UI locally in a browser.
         # WhatsApp bridge: drives WhatsApp Web via Puppeteer, exposes a
         # local HTTP API. First run needs an interactive QR scan from a
         # real terminal — until session is cached at
@@ -269,8 +274,11 @@ def _run_tray(sup: Supervisor) -> None:
         ),
         pystray.Menu.SEPARATOR,
         Item("Open Zoro UI", lambda: webbrowser.open("http://localhost:3000")),
-        Item("Pause listening", lambda: _wake_send("pause")),
-        Item("Resume listening", lambda: _wake_send("resume")),
+        # "mute"/"unmute" are the sticky, indefinite tray controls — distinct
+        # from the browser's auto-expiring call-pause lease ("pause"/"resume"),
+        # so a tray mute stays muted until the user lifts it.
+        Item("Pause listening", lambda: _wake_send("mute")),
+        Item("Resume listening", lambda: _wake_send("unmute")),
         Item(
             "Stand down (no proactivity)",
             _toggle_standdown,

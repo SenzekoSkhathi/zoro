@@ -1,0 +1,7 @@
+# Dependencies
+/node_modules
+
+# NOTE: dist/index.html IS tracked on purpose — it's a hand-written placeholder
+# (there's no frontend build step), and Tauri's frontendDist ("../dist") must
+# exist for `tauri build` even though the window loads the remote (Vercel) URL.
+# Rust/Tauri build output is ignored in src-tauri/.gitignore.
