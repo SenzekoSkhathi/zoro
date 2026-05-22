@@ -138,9 +138,33 @@ export default function Home() {
     };
   }, []);
 
-  const [phase, setPhase] = useState<Phase>("boot");
+  // Land straight in the listening lobby (wake word armed) instead of an
+  // "Activate Zoro" gate — the gate was an artifact of the old model where
+  // deactivate disarmed the wake word.
+  const [phase, setPhase] = useState<Phase>("idle");
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Browser autoplay rules block mic/TTS until a user gesture. The native
+  // Tauri shell grants audio up front, so there it's primed automatically;
+  // in a plain browser we surface one light "enable audio" tap.
+  const [audioPrimed, setAudioPrimed] = useState(false);
+  useEffect(() => {
+    const w = window as unknown as Record<string, unknown>;
+    if ("__TAURI_INTERNALS__" in w || "__TAURI__" in w) setAudioPrimed(true);
+  }, []);
+  const primeAudio = useCallback(() => {
+    try {
+      const Ctx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (Ctx) void new Ctx().resume();
+    } catch {
+      /* best-effort — the gesture itself unlocks autoplay regardless */
+    }
+    setAudioPrimed(true);
+  }, []);
   // True while Zoro has content on screen; docks the orb to the corner
   // and projects the beam, then clears back to the natural state.
   const [contentShown, setContentShown] = useState(false);
@@ -201,14 +225,16 @@ export default function Home() {
     setTimeout(() => setWakeGate(false), 3000);
   }, []);
 
-  // Drop all the way back to boot — wake service won't transition us out
-  // of boot, so "Hey Zoro" is effectively ignored until the user clicks
-  // Activate Zoro again.
+  // End the session but stay in the listening lobby — the wake word stays
+  // armed so "Hey Zoro" brings her right back. (Always-listening model:
+  // deactivate no longer disarms; a true off is the tray "Quit"/pause.)
   const deactivate = useCallback(() => {
     setToken(null);
     setError(null);
-    setPhase("boot");
+    setPhase("idle");
     setContentShown(false);
+    setWakeGate(true);
+    setTimeout(() => setWakeGate(false), 3000);
   }, []);
 
   const serviceOnline = wakeStatus === "connected";
@@ -239,12 +265,13 @@ export default function Home() {
 
       {phase !== "active" && <Orb mode={faceMode} />}
 
-      {/* Boot needs a manual gate (post-deactivate, "Hey Zoro" is
-          ignored). Idle/connecting rely on the orb itself for state. */}
-      {phase === "boot" && (
+      {/* Browser-only: one light tap to satisfy autoplay so wake-triggered
+          sessions have working audio. Suppressed in the Tauri shell (primed
+          automatically) and once the user has enabled it. */}
+      {!audioPrimed && phase !== "active" && (
         <div className={styles.activateDock}>
-          <button className={styles.button} onClick={activate}>
-            Activate Zoro
+          <button className={styles.button} onClick={primeAudio}>
+            Enable audio
           </button>
         </div>
       )}
