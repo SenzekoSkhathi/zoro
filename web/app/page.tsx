@@ -17,6 +17,7 @@ import { ZoroDisplay } from "@/components/ZoroDisplay";
 import { Transcript } from "@/components/Transcript";
 import { InstrumentRail } from "@/components/InstrumentRail";
 import { ToolTicker } from "@/components/ToolTicker";
+import { LoginGate } from "@/components/LoginGate";
 import styles from "./page.module.css";
 
 const USER_ACCENT = "#3fd0ff"; // cyan — you are speaking
@@ -122,6 +123,21 @@ function HudFrame({
 }
 
 export default function Home() {
+  // Access gate: null = still checking the session, false = show login,
+  // true = authorized. Everything (incl. the laptop-control token route)
+  // stays locked until the server confirms a valid session.
+  const [authed, setAuthed] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/session", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d: { authed?: boolean }) => alive && setAuthed(!!d.authed))
+      .catch(() => alive && setAuthed(false));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const [phase, setPhase] = useState<Phase>("boot");
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -203,6 +219,18 @@ export default function Home() {
   // instrument rail stays live across every phase (even idle), making the
   // app read as a running system rather than a dormant page.
   const telemetry = useTelemetry();
+
+  // Until authorized, render only the HUD shell + the login gate — no
+  // telemetry polling, no orb, no session. The dangerous endpoints 401
+  // server-side regardless, but this keeps the locked state clean too.
+  if (authed !== true) {
+    return (
+      <main className={styles.main}>
+        <HudFrame phase="boot" online={serviceOnline} />
+        {authed === false && <LoginGate onAuthed={() => setAuthed(true)} />}
+      </main>
+    );
+  }
 
   return (
     <main className={styles.main}>

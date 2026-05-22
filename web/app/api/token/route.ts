@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SignJWT } from "jose";
+import { isAuthed } from "@/lib/auth";
 
 // We mint the LiveKit join token by hand with `jose` (no livekit-server-sdk
 // dependency). LiveKit Cloud rejects tokens with an implausibly long TTL or
@@ -8,6 +9,12 @@ import { SignJWT } from "jose";
 // browser fetches a fresh token on every connect, so a short TTL is fine.
 // The API secret stays server-side; the browser only ever sees the JWT.
 export async function GET(req: NextRequest) {
+  // This endpoint mints a token that can drive the laptop — it is the most
+  // sensitive route in the app. Require a valid session cookie; fail closed.
+  if (!(await isAuthed())) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   const apiKey = process.env.LIVEKIT_API_KEY;
   const apiSecret = process.env.LIVEKIT_API_SECRET;
   if (!apiKey || !apiSecret) {

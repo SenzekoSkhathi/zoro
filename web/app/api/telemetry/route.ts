@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isAuthed } from "@/lib/auth";
 
 // Reads Zoro's own telemetry (Supabase) server-side and hands the web HUD
 // a compact snapshot of "how she's doing": today's success rate, recent
@@ -45,6 +46,11 @@ type LessonRow = { lesson: string; tool: string };
 type ReportRow = { summary: string; report_date: string; episode_stats: unknown };
 
 export async function GET() {
+  // Private activity data — gate behind the same session as /api/token.
+  if (!(await isAuthed())) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   const base = supabase();
   if (!base) {
     return NextResponse.json(
