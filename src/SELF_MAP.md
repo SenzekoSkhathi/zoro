@@ -8,6 +8,7 @@ list below to know which file to point Claude Code at via the
 
 ## Source modules (src/)
 - `src/zoro_agent.py` — Zoro — voice-first assistant agent.
+- `src/zoro_chains.py` — Sequence miner — turn recurring tool-call chains into open lessons.
 - `src/zoro_claude_code.py` — Hand a task off to the Claude Code CLI running in the Zoro repo.
 - `src/zoro_computer.py` — Vision-based computer-use loop — Zoro's fallback "hands".
 - `src/zoro_corrections.py` — Detect when the user's next utterance is correcting Zoro's last action.
@@ -28,6 +29,7 @@ list below to know which file to point Claude Code at via the
 - `src/zoro_supervisor.py` — Zoro always-on supervisor.
 - `src/zoro_tasks.py` — Durable task queue — 'do this thing later'.
 - `src/zoro_tools.py` — Pure helper logic for Zoro's tools (no LiveKit imports).
+- `src/zoro_updater.py` — Safe self-update for Zoro's Python backend.
 - `src/zoro_whatsapp.py` — WhatsApp access via the local Node bridge (services/whatsapp).
 - `src/zoro_youtube.py` — YouTube access: search + transcript fetch + Claude-powered summary.
 - `src/wake_service.py` — Zoro on-device wake-word service.
@@ -35,11 +37,13 @@ list below to know which file to point Claude Code at via the
 ## Sub-agents (agents/)
 - `agents/agent_smith.md` — Agent Smith: Sub-agent author. Writes new role files under `agents/` when Zoro decides she needs a new specialist.
 - `agents/coder.md` — Coder: General-purpose code editor for the Zoro repository. Makes focused, well-scoped changes that pass the boot check.
+- `agents/diagnostician.md` — Diagnostician: System troubleshooter for the Windows machine Zoro runs on. Runs PowerShell commands, inspects screen state, and iterates until the issue is resolved or clearly diagnosed.
 - `agents/researcher.md` — Researcher: Read-only research assistant. Investigates topics, reads source, searches the web, and reports findings in plain prose. Never writes files.
 
 ## Scripts (scripts/)
 - `scripts/build_self_map.py`
 - `scripts/install_autostart.ps1`
+- `scripts/make_icon.py`
 - `scripts/uninstall_autostart.ps1`
 - `scripts/zoro_autostart.vbs`
 - `scripts/zoro_daily_reports.sql`
