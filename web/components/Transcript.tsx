@@ -7,6 +7,7 @@ import {
   useDataChannel,
 } from "@livekit/components-react";
 import { HudPanel } from "./HudPanel";
+import { useWidgetLimit } from "./WidgetLimit";
 import styles from "./Transcript.module.css";
 
 // Same channel ZoroDisplay listens on. The agent's show_chat_history tool
@@ -31,6 +32,9 @@ export function Transcript({
   const endRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
 
+  // Chat counts toward the shared two-widget max alongside the grid widgets.
+  const { allowed, open, close } = useWidgetLimit();
+
   const { message } = useDataChannel(DISPLAY_TOPIC);
 
   useEffect(() => {
@@ -42,15 +46,26 @@ export function Transcript({
         data?: { show?: boolean; target?: string };
       };
       if (parsed?.kind === "chat") {
-        setVisible(parsed.data?.show !== false);
+        const show = parsed.data?.show !== false;
+        setVisible(show);
+        if (show) open("chat");
+        else close("chat");
       } else if (parsed?.kind === "close") {
         const t = parsed.data?.target;
-        if (t === "chat" || t === "all") setVisible(false);
+        if (t === "chat" || t === "all") {
+          setVisible(false);
+          close("chat");
+        }
       }
     } catch {
       /* not our frame */
     }
-  }, [message]);
+  }, [message, open, close]);
+
+  // The panel is on screen only while it's both asked-for and still permitted
+  // by the shared limiter — opening a third surface evicts "chat" from
+  // `allowed`, which hides this without touching `visible`.
+  const shown = visible && allowed.has("chat");
 
   // History accumulates regardless of visibility, so it's complete the
   // moment Zoro is asked to show it.
@@ -67,16 +82,16 @@ export function Transcript({
   );
 
   useEffect(() => {
-    if (visible) {
+    if (shown) {
       endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
     }
-  }, [lines.length, visible]);
+  }, [lines.length, shown]);
 
   useEffect(() => {
-    onActiveChange?.(visible);
-  }, [visible, onActiveChange]);
+    onActiveChange?.(shown);
+  }, [shown, onActiveChange]);
 
-  if (!visible) return null;
+  if (!shown) return null;
 
   return (
     <HudPanel
@@ -87,7 +102,10 @@ export function Transcript({
       headerExtra={
         <button
           className={styles.close}
-          onClick={() => setVisible(false)}
+          onClick={() => {
+            setVisible(false);
+            close("chat");
+          }}
           aria-label="Close chat history"
         >
           ✕

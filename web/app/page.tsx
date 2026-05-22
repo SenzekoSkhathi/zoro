@@ -15,6 +15,7 @@ import { useTelemetry } from "@/hooks/useTelemetry";
 import { Orb, type OrbMode } from "@/components/Orb";
 import { ZoroDisplay } from "@/components/ZoroDisplay";
 import { Transcript } from "@/components/Transcript";
+import { WidgetLimitProvider } from "@/components/WidgetLimit";
 import { InstrumentRail } from "@/components/InstrumentRail";
 import { ToolTicker } from "@/components/ToolTicker";
 import { LoginGate } from "@/components/LoginGate";
@@ -463,8 +464,10 @@ function ZoroConversation({
         <p className={styles.state}>{state ?? "connecting"}</p>
       )}
       <ToolTicker />
-      <ZoroDisplay onActiveChange={setCardActive} />
-      <Transcript onActiveChange={setChatActive} />
+      <WidgetLimitProvider>
+        <ZoroDisplay onActiveChange={setCardActive} />
+        <Transcript onActiveChange={setChatActive} />
+      </WidgetLimitProvider>
     </div>
   );
 }

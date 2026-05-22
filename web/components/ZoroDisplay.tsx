@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useDataChannel } from "@livekit/components-react";
 import { HudPanel } from "./HudPanel";
+import { useWidgetLimit } from "./WidgetLimit";
 import styles from "./ZoroDisplay.module.css";
 
 // Mirrors zoro_agent.publish_display: {kind, data}. Voice stays primary —
@@ -844,6 +845,10 @@ export function ZoroDisplay({
     Partial<Record<WidgetKind, Widget>>
   >({});
 
+  // Shared two-widget limiter, spanning grid widgets *and* the chat panel.
+  const { allowed, open, close: limitClose, clear: limitClear } =
+    useWidgetLimit();
+
   const { message } = useDataChannel(DISPLAY_TOPIC);
 
   useEffect(() => {
@@ -862,6 +867,7 @@ export function ZoroDisplay({
         const t = parsed.data?.target;
         if (t === "all") {
           setWidgets({});
+          limitClear();
         } else if (t) {
           setWidgets((w) => {
             if (!(t in w)) return w;
@@ -869,6 +875,7 @@ export function ZoroDisplay({
             delete next[t as WidgetKind];
             return next;
           });
+          limitClose(t);
         }
         return;
       }
@@ -890,34 +897,44 @@ export function ZoroDisplay({
         "youtube",
       ]);
       if (!widgetKinds.has(parsed.kind as WidgetKind)) return;
-      // Upsert this kind's widget with a fresh timestamp.
+      // Upsert this kind's widget with a fresh timestamp, then register the
+      // open with the shared limiter. The limiter enforces the two-widget max
+      // and may evict the oldest surface (a grid widget or the chat panel);
+      // the reconcile effect below drops anything that falls out of `allowed`.
       const incoming = { ...parsed, ts: Date.now() } as Widget;
-      setWidgets((w) => ({ ...w, [parsed.kind as WidgetKind]: incoming }));
+      const kind = parsed.kind as WidgetKind;
+      setWidgets((w) => ({ ...w, [kind]: incoming }));
+      open(kind);
     } catch (e) {
       console.warn("[ZoroDisplay] bad frame", e);
     }
-  }, [message]);
+  }, [message, open, limitClose, limitClear]);
 
-  const active = Object.keys(widgets).length > 0;
+  // On-screen widgets are exactly those the shared limiter still permits.
+  // A kind the limiter evicted drops out of `allowed`, so it stops rendering
+  // even though its (now stale) payload lingers in `widgets` until that kind
+  // is re-published. Render order: oldest first so newly-opened widgets land
+  // on the right / bottom of the grid instead of shoving established ones.
+  const list = (Object.values(widgets) as Widget[])
+    .filter((w) => allowed.has(w.kind))
+    .sort((a, b) => a.ts - b.ts);
+  const active = list.length > 0;
+
   useEffect(() => {
     onActiveChange?.(active);
   }, [active, onActiveChange]);
 
-  const close = (kind: WidgetKind) =>
+  const close = (kind: WidgetKind) => {
+    limitClose(kind);
     setWidgets((w) => {
       if (!(kind in w)) return w;
       const next = { ...w };
       delete next[kind];
       return next;
     });
+  };
 
   if (!active) return null;
-
-  // Render order: oldest first so newly-opened widgets land on the right /
-  // bottom of the grid instead of shoving the established ones around.
-  const list = (Object.values(widgets) as Widget[]).sort(
-    (a, b) => a.ts - b.ts,
-  );
 
   return (
     <div className={styles.grid}>
