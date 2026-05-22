@@ -203,7 +203,10 @@ async def run_streaming(
         ",".join(disallowed),
         cwd=str(cwd or ZORO_ROOT),
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        # Merge stderr into stdout so the streaming loop below drains
+        # both. A separate stderr pipe deadlocks Claude Code on long
+        # `--verbose` runs once the ~64 KB stderr buffer fills.
+        stderr=asyncio.subprocess.STDOUT,
     )
     assert proc.stdout is not None
     try:
@@ -240,18 +243,9 @@ async def run_streaming(
         except asyncio.TimeoutError:
             proc.kill()
         if proc.returncode and proc.returncode != 0:
-            err = b""
-            if proc.stderr:
-                try:
-                    err = await proc.stderr.read()
-                except Exception:  # noqa: BLE001
-                    err = b""
             yield {
                 "kind": "error",
-                "text": (
-                    err.decode("utf-8", errors="replace").strip()
-                    or f"claude exited with code {proc.returncode}"
-                ),
+                "text": f"claude exited with code {proc.returncode}",
             }
 
     if not is_self_mod or branch is None:
