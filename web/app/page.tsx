@@ -149,18 +149,22 @@ export default function Home() {
   // Tauri shell grants audio up front, so there it's primed automatically;
   // in a plain browser we surface one light "enable audio" tap.
   const [audioPrimed, setAudioPrimed] = useState(false);
+  const [inShell, setInShell] = useState(false);
   useEffect(() => {
     const w = window as unknown as Record<string, unknown>;
     // Tauri loads our hosted URL as remote content, which doesn't reliably
     // get the __TAURI__ global injected — so the native shell also tags its
     // webview with a custom user-agent ("ZoroShell"). Check all three.
     const ua = navigator.userAgent || "";
-    const inShell =
+    const shell =
       "__TAURI_INTERNALS__" in w ||
       "__TAURI__" in w ||
       ua.includes("ZoroShell") ||
       new URLSearchParams(window.location.search).get("shell") === "tauri";
-    if (inShell) setAudioPrimed(true);
+    if (shell) {
+      setAudioPrimed(true);
+      setInShell(true);
+    }
   }, []);
   const primeAudio = useCallback(() => {
     try {
@@ -218,6 +222,21 @@ export default function Home() {
     if (phase === "idle" && !wakeGate) wakeResume();
   }, [phase, token, connect, wakePause, wakeResume, wakeGate]);
 
+  // Native wake bridge: in the Tauri shell the page can't reach the local
+  // ws:// wake socket (mixed content), so the Rust side calls this global
+  // when the wake service relaunches the app with --wake. Same effect as a
+  // websocket wake. Only armed once authorized so a stray call can't start
+  // an (unauthorized) session.
+  useEffect(() => {
+    if (authed !== true) return;
+    const w = window as unknown as { __zoroWake?: () => void };
+    w.__zoroWake = () =>
+      setPhase((p) => (p === "idle" ? "connecting" : p));
+    return () => {
+      delete w.__zoroWake;
+    };
+  }, [authed]);
+
   const activate = useCallback(() => {
     setError(null);
     setToken(null);
@@ -246,7 +265,9 @@ export default function Home() {
     setTimeout(() => setWakeGate(false), 3000);
   }, []);
 
-  const serviceOnline = wakeStatus === "connected";
+  // In the Tauri shell wake arrives via the native bridge, not the (blocked)
+  // ws:// socket, so treat the shell as wake-capable for the status readout.
+  const serviceOnline = wakeStatus === "connected" || inShell;
   const faceMode: OrbMode =
     phase === "connecting" ? "connecting" : phase === "idle" ? "listening" : "idle";
 

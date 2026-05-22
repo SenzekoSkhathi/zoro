@@ -16,6 +16,7 @@ Run:
 import asyncio
 import json
 import os
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -24,6 +25,50 @@ import numpy as np
 import sounddevice as sd
 import websockets
 from openwakeword.model import Model
+
+_ROOT = Path(__file__).resolve().parent.parent
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _app_exe() -> Path | None:
+    """Locate the Zoro desktop shell exe (installed or dev build), if any."""
+    override = os.environ.get("ZORO_APP_EXE")
+    if override and Path(override).is_file():
+        return Path(override)
+    for c in (
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Zoro" / "Zoro.exe",
+        Path("C:/Program Files/Zoro/Zoro.exe"),
+        _ROOT / "desktop" / "src-tauri" / "target" / "release" / "zoro-desktop.exe",
+    ):
+        try:
+            if c.is_file():
+                return c
+        except OSError:
+            continue
+    return None
+
+
+def _summon_app(flag: str = "--wake") -> None:
+    """Surface the Zoro desktop app on wake and trigger a session. Launching
+    the exe routes through the app's single-instance handler, which shows the
+    window and (because of `flag`) calls the page's wake bridge — the native
+    path that replaces the ws:// wake the hosted HTTPS UI can't use. Best-
+    effort and a no-op until the app is installed; browser users are
+    unaffected since the mic wake is laptop-local.
+    """
+    exe = _app_exe()
+    if exe is None:
+        return
+    try:
+        subprocess.Popen(
+            [str(exe), flag],
+            creationflags=_NO_WINDOW,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        pass
 
 # Default to the trained custom "hey_zoro" model if present, else fall back to
 # openWakeWord's built-in "hey_jarvis". Override via the env var if needed.
@@ -63,6 +108,7 @@ async def _handler(ws):
                 # as a spoken wake word would, so it connects and the agent
                 # delivers the queued directive.
                 print("[wake] proactive trigger -> notifying browser")
+                _summon_app("--proactive")
                 msg = json.dumps({"event": "proactive"})
                 for c in list(clients):
                     if c is not ws:
@@ -77,6 +123,10 @@ def _broadcast_wake(loop, name):
     # runs IN the loop thread. run_coroutine_threadsafe is the cross-thread
     # primitive and is the wrong tool here (it only worked by accident
     # because the future was never awaited); create_task is correct.
+    # Surface the desktop app (if installed) so its window appears even when
+    # it was sitting hidden in the tray; the connected webview handles the
+    # session as before.
+    _summon_app("--wake")
     msg = json.dumps({"event": "wake", "model": name})
     for ws in list(clients):
         loop.create_task(ws.send(msg))
