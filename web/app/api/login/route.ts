@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { SESSION_COOKIE, checkPassword, mintSession } from "@/lib/auth";
+import {
+  SESSION_COOKIE,
+  SESSION_MAX_AGE,
+  checkPassword,
+  mintSession,
+} from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +39,7 @@ export async function POST(req: NextRequest) {
     secure: true,
     sameSite: "lax",
     path: "/",
-    maxAge: 30 * 24 * 60 * 60,
+    maxAge: SESSION_MAX_AGE,
   });
   return NextResponse.json({ ok: true });
 }

@@ -12,7 +12,11 @@ import { SignJWT, jwtVerify } from "jose";
 //     every protected route 401s. A missing env var must never mean "open".
 
 export const SESSION_COOKIE = "zoro_session";
-const SESSION_TTL = "30d";
+// Long-lived: log in once per device and forget. Safe because the JWT is
+// signed with the password — rotating ZORO_ACCESS_PASSWORD instantly
+// revokes every outstanding session everywhere (the global kill switch).
+const SESSION_TTL = "365d";
+export const SESSION_MAX_AGE = 365 * 24 * 60 * 60;
 
 function passwordOrNull(): string | null {
   const p = process.env.ZORO_ACCESS_PASSWORD;
