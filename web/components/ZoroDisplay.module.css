@@ -18,8 +18,8 @@
 .answer {
   margin: 0;
   font-size: 0.98rem;
-  line-height: 1.6;
-  color: #dbf4ff;
+  line-height: 1.65;
+  color: #e2f6ff;
 }
 
 .sectionLabel {
@@ -28,10 +28,12 @@
   font-size: 0.6rem;
   letter-spacing: 0.24em;
   text-transform: uppercase;
-  color: #6fd6f0;
-  opacity: 0.8;
-  border-left: 2px solid rgba(79, 227, 255, 0.5);
-  padding-left: 0.55rem;
+  /* Subordinate metadata label — a single deliberate muted cyan (no
+     opacity stacking) that defers to the answer text and matches the
+     instrument-rail label language elsewhere in the HUD. */
+  color: #74aec4;
+  border-left: 2px solid rgba(79, 227, 255, 0.32);
+  padding-left: 0.6rem;
 }
 
 .sources {

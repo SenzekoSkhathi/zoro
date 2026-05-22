@@ -1,7 +1,10 @@
 .main {
-  --cyan: #4fe3ff;
-  --cyan-soft: rgba(79, 227, 255, 0.55);
-  --cyan-faint: rgba(79, 227, 255, 0.16);
+  /* Cyan intensity ladder — read top to bottom as bright→ambient:
+     active/interactive → structural lines → quiet decoration. */
+  --cyan: #4fe3ff; /* active, interactive, signature anchors */
+  --cyan-soft: rgba(79, 227, 255, 0.55); /* glow, hover, emphasis */
+  --cyan-faint: rgba(79, 227, 255, 0.16); /* structural hairlines (frame, panels) */
+  --cyan-ambient: rgba(79, 227, 255, 0.08); /* ambient decoration (rulers, ticks) */
   --glass: rgba(8, 18, 27, 0.5);
 
   position: relative;
@@ -127,9 +130,10 @@
   position: absolute;
   inset: 0;
   background: radial-gradient(
-    ellipse 80% 75% at 50% 48%,
-    transparent 55%,
-    rgba(2, 5, 9, 0.75) 100%
+    ellipse 82% 78% at 50% 48%,
+    transparent 58%,
+    rgba(2, 5, 9, 0.4) 82%,
+    rgba(2, 5, 9, 0.62) 100%
   );
 }
 
@@ -140,11 +144,12 @@
   background: linear-gradient(
     180deg,
     transparent 0%,
-    rgba(79, 227, 255, 0.04) 49%,
-    transparent 51%
+    rgba(79, 227, 255, 0.022) 48%,
+    rgba(79, 227, 255, 0.022) 52%,
+    transparent 100%
   );
-  background-size: 100% 260%;
-  animation: screenScan 9s linear infinite;
+  background-size: 100% 280%;
+  animation: screenScan 16s linear infinite;
 }
 @keyframes screenScan {
   from {
@@ -171,17 +176,17 @@
   width: 9px;
   background-image: repeating-linear-gradient(
     180deg,
-    var(--cyan-faint) 0 1px,
-    transparent 1px 26px
+    var(--cyan-ambient) 0 1px,
+    transparent 1px 30px
   );
 }
 .rulerL {
   left: 28px;
-  border-left: 1px solid var(--cyan-faint);
+  border-left: 1px solid var(--cyan-ambient);
 }
 .rulerR {
   right: 28px;
-  border-right: 1px solid var(--cyan-faint);
+  border-right: 1px solid var(--cyan-ambient);
   transform: scaleX(-1);
 }
 
