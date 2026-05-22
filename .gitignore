@@ -32,3 +32,6 @@ services/whatsapp/.wwebjs_auth/
 # OS / editor
 .DS_Store
 Thumbs.db
+
+# Runtime artifact — Zoro overwrites this on every screen capture
+web/public/last_screen.png
