@@ -29,6 +29,7 @@ import httpx
 
 import asyncio
 
+import zoro_chains
 import zoro_claude_code
 import zoro_episodes
 import zoro_lessons
@@ -176,6 +177,14 @@ def run_once() -> dict[str, Any]:
     """Generate today's report. Returns a small diagnostic dict so
     callers can log what happened. Safe to call repeatedly; the DB
     upsert keeps it one row per date."""
+    # Mine recurring tool-call chains BEFORE reading lessons, so any new
+    # chain-pattern lessons land in the same nightly cycle and can be
+    # included in the summary. Best-effort; failure here is non-fatal.
+    try:
+        chain_mining = zoro_chains.mine_and_write(days=7, max_new=5)
+    except Exception as e:  # noqa: BLE001
+        chain_mining = {"status": "skipped", "reason": f"chain miner error: {e}"}
+
     open_lessons = zoro_lessons.open_lessons(limit=50)
     stats = _episode_stats()
     top = _pick_top_lessons(open_lessons, limit=3)
@@ -242,6 +251,7 @@ def run_once() -> dict[str, Any]:
         "lessons_reported": len(top),
         "needs_resources": needs,
         "autonomous": auto_outcome,
+        "chain_mining": chain_mining,
     }
 
 

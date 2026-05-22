@@ -184,7 +184,9 @@ def run_task(task: str, api_key: str) -> str:
                 args={"task": task},
                 outcome=outcome,
                 latency_ms=latency_ms,
-                steps=steps_used or None,
+                # Preserve 0 (stand-down before any step ran) — `or None`
+                # was silently dropping that signal as "unknown".
+                steps=steps_used,
                 result_summary=final[:300] if final else None,
                 error=err,
             )

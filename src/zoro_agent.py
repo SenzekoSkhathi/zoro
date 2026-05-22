@@ -94,7 +94,15 @@ def _consume_correctable_episode() -> dict | None:
 
 # Load Silero VAD once at module import (~200-500ms) instead of per session.
 # The worker stays warm via num_idle_processes=1, so sessions reuse this.
-_VAD = silero.VAD.load()
+# Tuned to reject background noise / audio artifacts: a higher activation
+# threshold (default 0.5 → 0.65) ignores low-confidence frames, and a
+# longer min_speech_duration (default 50ms → 150ms) drops clicks, coughs,
+# and short bursts that aren't real speech.
+_VAD = silero.VAD.load(
+    activation_threshold=0.65,
+    min_speech_duration=0.15,
+    min_silence_duration=0.55,
+)
 
 
 def build_instructions() -> str:
@@ -275,7 +283,13 @@ async def _run_claude_task(
 
     The card replaces in place on each event; a single "claude" widget
     holds the latest task and its progress log.
+
+    Phase 3: writes a `kind='sub_agent'` (or `kind='claude_code'` for
+    ungated runs) episode at the end so sub-agent quality is measurable
+    by the same telemetry stack as every other tool. Without this the
+    fire-and-forget runs were invisible to the reflector.
     """
+    t0 = time.monotonic()
     state: dict = {
         "task": task,
         "role": role or "",
@@ -284,6 +298,7 @@ async def _run_claude_task(
         "result": "",
     }
     await publish_display("claude", state)
+    err_exc: str | None = None
     try:
         async for ev in zoro_claude_code.run_streaming(task, role=role):
             kind = ev["kind"]
@@ -305,7 +320,35 @@ async def _run_claude_task(
     except Exception as e:  # noqa: BLE001 - background, must not crash
         state["status"] = "failed"
         state["result"] = str(e)
+        err_exc = f"{type(e).__name__}: {e}"
         await publish_display("claude", state)
+
+    # Map the streamed final state to an episode outcome. Merge status
+    # is the strongest signal when present (merged/rolled-back/no-changes
+    # are all distinguishable); fall back to the run's done/failed flag.
+    merge_status = state.get("merge")
+    if merge_status == "merged":
+        outcome = "success"
+    elif merge_status == "rolled-back":
+        outcome = "error"
+    elif merge_status in ("no-changes", "skipped"):
+        outcome = "aborted"
+    else:
+        outcome = "success" if state["status"] == "done" else "error"
+
+    asyncio.create_task(asyncio.to_thread(
+        zoro_episodes.log_episode,
+        kind="sub_agent" if role else "claude_code",
+        tool=role or "claude_code",
+        task=task[:300],
+        args={"task": task, "role": role or ""},
+        outcome=outcome,
+        latency_ms=int((time.monotonic() - t0) * 1000),
+        result_summary=(state.get("result") or "")[:300],
+        error=err_exc,
+        session_id=_SESSION_ID,
+    ))
+
     await _speak_or_queue(session, _summarise_claude_result(state))
 
 
@@ -436,8 +479,51 @@ def _logged(fn):
 
 
 def _similar_episodes_block() -> str:
-    """Render a tiny 'recent attempts' summary for the system prompt. Best-
-    effort: empty string if Supabase is unreachable or there's no history."""
+    """Render the in-session self-improvement block for the system prompt.
+
+    Unified Phase 3 lens — both reflection systems feed this block,
+    preferred-quality first so they reinforce rather than contradict:
+
+      1. The most recent unspoken daily report (Haiku-curated summary,
+         the highest-quality signal — already deemed worth surfacing to
+         Skhathi tomorrow morning).
+      2. Top open lessons (Haiku-curated per-failure observations).
+      3. Raw recent_failures rows (fallback — Phase 1 behaviour).
+
+    All best-effort: any layer failing falls through to the next. Empty
+    string if nothing is available."""
+    daily = None
+    try:
+        import zoro_reflector
+        daily = zoro_reflector.unspoken_report()
+    except Exception:  # noqa: BLE001
+        daily = None
+    if daily and (daily.get("summary") or "").strip():
+        return (
+            "\n\n# Last night's self-improvement reflection (your own words)\n"
+            + daily["summary"].strip()
+            + "\n\nKeep this in mind; don't repeat yesterday's stumbles."
+        )
+
+    lessons: list[dict] = []
+    try:
+        lessons = zoro_lessons.open_lessons(limit=5)
+    except Exception:  # noqa: BLE001
+        lessons = []
+    if lessons:
+        lines = []
+        for l in lessons:
+            tool = l.get("tool", "?")
+            text = (l.get("lesson") or "").strip()
+            if not text:
+                continue
+            lines.append(f"- ({tool}) {text[:160]}")
+        if lines:
+            return (
+                "\n\n# Open lessons (curated — apply these going forward)\n"
+                + "\n".join(lines)
+            )
+
     try:
         rows = zoro_episodes.recent_failures(5)
     except Exception:  # noqa: BLE001
@@ -957,10 +1043,14 @@ class Zoro(Agent):
         return f"Clipboard: {val}" if val else "The clipboard is empty."
 
     @function_tool()
-    @_logged
     async def control_computer(
         self, context: RunContext, task: str
     ) -> str:
+        # NOTE: deliberately NOT wrapped in @_logged — zoro_computer.run_task
+        # already writes a richer kind='computer_use' episode (steps,
+        # latency, classified outcome). Double-decorating produced paired
+        # rows with the outer one misclassified as 'success' because the
+        # "I stopped…" return string doesn't match the apology heuristic.
         """Visually control the computer to do a multi-step task in an app's
         UI — only when no other tool fits (open_folder/open_item/find_files
         handle files & folders far faster, prefer those). This watches the
@@ -1804,6 +1894,138 @@ class Zoro(Agent):
         )
         return "Upcoming: " + "; ".join(lines)
 
+    # --- Calendar write ops (Phase 3 new surface) --------------------------
+
+    @function_tool()
+    @_logged
+    async def create_calendar_event(
+        self, context: RunContext, summary: str,
+        start_iso: str, end_iso: str, description: str = "",
+    ) -> str:
+        """Create a calendar event. State-changing — confirm the details
+        with the user before calling.
+
+        Convert the user's spoken time into ISO 8601 WITH the local UTC
+        offset yourself (e.g. "tomorrow 2pm for an hour" -> start
+        2026-05-23T14:00:00+02:00, end 2026-05-23T15:00:00+02:00). Use the
+        session's current local time as your anchor for relative phrasing.
+
+        Args:
+            summary: Event title.
+            start_iso: ISO 8601 start with offset.
+            end_iso: ISO 8601 end with offset.
+            description: Optional notes/details.
+        """
+        acct = _google_account()
+        if not acct:
+            return "No Google account is connected."
+        try:
+            res = await asyncio.to_thread(
+                zoro_google.create_event, acct, summary,
+                start_iso, end_iso, description or None,
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"I couldn't create that event: {e}"
+        try:
+            when = datetime.fromisoformat(start_iso).astimezone().strftime(
+                "%a %b %d at %I:%M %p"
+            )
+        except ValueError:
+            when = start_iso
+        return f"Created '{res['summary']}' on {when}."
+
+    @function_tool()
+    @_logged
+    async def reschedule_calendar_event(
+        self, context: RunContext, query: str,
+        start_iso: str, end_iso: str,
+    ) -> str:
+        """Move the upcoming event best matching `query` to a new time.
+        State-changing — confirm before calling. Convert the new time to
+        ISO 8601 with offset yourself.
+
+        Args:
+            query: Which event to move, in the user's words.
+            start_iso: New ISO 8601 start with offset.
+            end_iso: New ISO 8601 end with offset.
+        """
+        acct = _google_account()
+        if not acct:
+            return "No Google account is connected."
+        try:
+            hits = await asyncio.to_thread(
+                zoro_google.find_events, acct, query, 1
+            )
+            if not hits:
+                return f"I couldn't find an upcoming event matching '{query}'."
+            await asyncio.to_thread(
+                zoro_google.move_event, acct, hits[0]["id"], start_iso, end_iso
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"I couldn't reschedule that: {e}"
+        try:
+            when = datetime.fromisoformat(start_iso).astimezone().strftime(
+                "%a %b %d at %I:%M %p"
+            )
+        except ValueError:
+            when = start_iso
+        return f"Moved '{hits[0]['summary']}' to {when}."
+
+    @function_tool()
+    @_logged
+    async def cancel_calendar_event(
+        self, context: RunContext, query: str
+    ) -> str:
+        """Delete the upcoming event best matching `query`. State-changing
+        and not easily undone — confirm with the user before calling.
+
+        Args:
+            query: Which event to cancel, in the user's words.
+        """
+        acct = _google_account()
+        if not acct:
+            return "No Google account is connected."
+        try:
+            hits = await asyncio.to_thread(
+                zoro_google.find_events, acct, query, 1
+            )
+            if not hits:
+                return f"I couldn't find an upcoming event matching '{query}'."
+            await asyncio.to_thread(
+                zoro_google.cancel_event, acct, hits[0]["id"]
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"I couldn't cancel that: {e}"
+        return f"Cancelled '{hits[0]['summary']}'."
+
+    @function_tool()
+    @_logged
+    async def respond_to_invite(
+        self, context: RunContext, query: str, accept: bool
+    ) -> str:
+        """Accept or decline a calendar invite best matching `query`.
+        State-changing (notifies the organiser) — confirm first.
+
+        Args:
+            query: Which invite, in the user's words.
+            accept: True to accept, False to decline.
+        """
+        acct = _google_account()
+        if not acct:
+            return "No Google account is connected."
+        try:
+            hits = await asyncio.to_thread(
+                zoro_google.find_events, acct, query, 1
+            )
+            if not hits:
+                return f"I couldn't find an invite matching '{query}'."
+            res = await asyncio.to_thread(
+                zoro_google.respond_to_event, acct, hits[0]["id"], accept
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"I couldn't respond to that invite: {e}"
+        return f"{res['status'].capitalize()} '{res['summary']}'."
+
     @function_tool()
     @_logged
     @zoro_retry.transient()
@@ -1868,6 +2090,170 @@ class Zoro(Agent):
         except Exception as e:  # noqa: BLE001
             return f"I couldn't send that: {e}"
         return f"Sent to {to}."
+
+    # --- Gmail deep ops (Phase 3 new surface) ------------------------------
+
+    @function_tool()
+    @_logged
+    @zoro_retry.transient()
+    async def search_mail(
+        self, context: RunContext, query: str, limit: int = 5
+    ) -> str:
+        """Search Gmail by a natural query across all folders (not just
+        unread). Use for "find the email from the bank", "any mail about
+        the invoice", "what did Sarah send last week". Read-only.
+
+        Pass a Gmail-style query: plain words work, but you can also use
+        operators like from:, subject:, newer_than:7d, has:attachment.
+
+        Args:
+            query: What to look for.
+            limit: Max messages to summarize (default 5).
+        """
+        acct = _google_account()
+        if not acct:
+            return "No Google account is connected."
+        try:
+            msgs = await asyncio.to_thread(
+                zoro_google.search_messages, acct, query, limit
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"I couldn't search your mail: {e}"
+        if not msgs:
+            await publish_display("inbox", {"messages": []})
+            return f"No mail matching '{query}'."
+        out = []
+        card_msgs = []
+        for m in msgs:
+            frm = m["from"].split("<", 1)[0].strip().strip('"') or m["from"]
+            out.append(f"from {frm}: {m['subject']}")
+            card_msgs.append({
+                "from": frm,
+                "subject": m["subject"],
+                "snippet": m.get("snippet", ""),
+            })
+        await publish_display("inbox", {"messages": card_msgs})
+        return f"Found {len(msgs)}: " + "; ".join(out)
+
+    @function_tool()
+    @_logged
+    @zoro_retry.transient()
+    async def read_email(self, context: RunContext, query: str) -> str:
+        """Read the full body of the email best matching `query` aloud.
+        Use for "read me the email from the landlord", "what does the
+        invoice email say". Read-only — just do it.
+
+        Args:
+            query: Which email to read, in the user's words.
+        """
+        acct = _google_account()
+        if not acct:
+            return "No Google account is connected."
+        try:
+            msg = await asyncio.to_thread(
+                zoro_google.find_one_message, acct, query
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"I couldn't open that email: {e}"
+        if not msg:
+            return f"I couldn't find an email matching '{query}'."
+        frm = msg["from"].split("<", 1)[0].strip().strip('"') or msg["from"]
+        body = (msg.get("body") or "").strip()
+        await publish_display("inbox", {"messages": [{
+            "from": frm, "subject": msg["subject"], "snippet": body[:600],
+        }]})
+        if not body:
+            return f"The email from {frm} about '{msg['subject']}' has no readable text body."
+        # Bound the spoken length; the full text is on the card.
+        spoken = body if len(body) <= 1200 else body[:1200] + "… that's the gist."
+        return f"From {frm}, subject {msg['subject']}: {spoken}"
+
+    @function_tool()
+    @_logged
+    async def reply_email(
+        self, context: RunContext, query: str, body: str
+    ) -> str:
+        """Reply in-thread to the email best matching `query`.
+
+        State-changing: per your safety contract, only call this AFTER
+        you've read back who it's going to and the gist, and the user has
+        confirmed.
+
+        Args:
+            query: Which email to reply to, in the user's words.
+            body: The plain-text reply to send.
+        """
+        acct = _google_account()
+        if not acct:
+            return "No Google account is connected."
+        try:
+            hit = await asyncio.to_thread(
+                zoro_google.find_one_message, acct, query
+            )
+            if not hit:
+                return f"I couldn't find an email matching '{query}' to reply to."
+            res = await asyncio.to_thread(
+                zoro_google.reply_to_message, acct, hit["id"], body
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"I couldn't send the reply: {e}"
+        frm = res["to"].split("<", 1)[0].strip().strip('"') or res["to"]
+        return f"Replied to {frm}."
+
+    @function_tool()
+    @_logged
+    async def archive_email(self, context: RunContext, query: str) -> str:
+        """Archive (remove from inbox) the email best matching `query`.
+
+        State-changing — confirm with the user first per your safety
+        contract, since it clears the message from the inbox view.
+
+        Args:
+            query: Which email to archive, in the user's words.
+        """
+        acct = _google_account()
+        if not acct:
+            return "No Google account is connected."
+        try:
+            hit = await asyncio.to_thread(
+                zoro_google.find_one_message, acct, query
+            )
+            if not hit:
+                return f"I couldn't find an email matching '{query}'."
+            await asyncio.to_thread(
+                zoro_google.archive_message, acct, hit["id"]
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"I couldn't archive that: {e}"
+        return f"Archived the email about '{hit['subject']}'."
+
+    @function_tool()
+    @_logged
+    async def mark_email_read(
+        self, context: RunContext, query: str, read: bool = True
+    ) -> str:
+        """Mark the email best matching `query` as read (or unread).
+        Read-state changes are low-risk — just do it.
+
+        Args:
+            query: Which email, in the user's words.
+            read: True to mark read, False to mark unread.
+        """
+        acct = _google_account()
+        if not acct:
+            return "No Google account is connected."
+        try:
+            hit = await asyncio.to_thread(
+                zoro_google.find_one_message, acct, query
+            )
+            if not hit:
+                return f"I couldn't find an email matching '{query}'."
+            await asyncio.to_thread(
+                zoro_google.mark_read, acct, hit["id"], read
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"I couldn't update that: {e}"
+        return f"Marked '{hit['subject']}' as {'read' if read else 'unread'}."
 
     @function_tool()
     @_logged
@@ -2336,11 +2722,17 @@ async def entrypoint(ctx: JobContext) -> None:
             "interruption": {
                 "enabled": True,
                 "mode": "adaptive",
-                "min_duration": 0.35,
+                # Require ~0.6s of sustained speech before cutting Zoro off.
+                # Lower values (0.35s) tripped on coughs, keyboard taps, and
+                # ambient TV/voices; 0.6s is long enough that incidental
+                # noise is filtered but a real "wait —" still barges in.
+                "min_duration": 0.6,
                 # Resume mid-sentence if the apparent interrupt turned out
                 # to be a cough / backchannel within the timeout window.
+                # Wider window so the SDK has more time to retroactively
+                # classify a false-positive and resume speaking.
                 "resume_false_interruption": True,
-                "false_interruption_timeout": 2.0,
+                "false_interruption_timeout": 3.0,
                 "discard_audio_if_uninterruptible": True,
             },
             "preemptive_generation": {"enabled": True, "preemptive_tts": False},
@@ -2383,12 +2775,18 @@ async def entrypoint(ctx: JobContext) -> None:
     @session.on("agent_false_interruption")
     def _on_false_interrupt(ev) -> None:
         resumed = bool(getattr(ev, "resumed", False))
+        # A resumed false-interrupt is a non-event: Zoro twitched and
+        # auto-recovered the same sentence, so it's a success, not a
+        # failure. Only a false-interrupt she did NOT recover from
+        # (resumed=False) is real friction worth surfacing. Logging the
+        # resumed ones as success keeps the *rate* visible for tuning
+        # without flooding the failure report or skewing reflection.
         asyncio.create_task(asyncio.to_thread(
             zoro_episodes.log_episode,
             kind="voice",
             tool="false_interruption",
             task="agent stopped speaking but the user wasn't really talking",
-            outcome="error" if not resumed else "aborted",
+            outcome="success" if resumed else "aborted",
             result_summary=f"resumed={resumed}",
             session_id=_SESSION_ID,
         ))

@@ -114,9 +114,30 @@ def find_app(name: str) -> Optional[dict]:
     )
     if prefix:
         return prefix
-    return next(
+    substring = next(
         (a for a in apps if needle in a["name"].lower()), None
     )
+    if substring:
+        return substring
+    # Fuzzy fallback for speech-to-text drift (e.g. "amatuba" -> "amathuba",
+    # "discrod" -> "discord"). A dropped/extra letter defeats the substring
+    # check but barely dents similarity, so compare against each app name
+    # (and its first word, so "amathuba" matches a longer official title)
+    # and take the best above a conservative threshold.
+    from difflib import SequenceMatcher
+
+    best: Optional[dict] = None
+    best_score = 0.0
+    for a in apps:
+        title = a["name"].lower()
+        score = max(
+            SequenceMatcher(None, needle, title).ratio(),
+            SequenceMatcher(None, needle, title.split()[0] if title.split() else title).ratio(),
+        )
+        if score > best_score:
+            best_score, best = score, a
+    # 0.8 keeps "amatuba"~"amathuba" (~0.93) while rejecting unrelated names.
+    return best if best_score >= 0.8 else None
 
 
 def open_app(name: str) -> dict:

@@ -150,6 +150,95 @@ def agenda(account: str, hours: int = 24) -> list[dict]:
     return out
 
 
+def find_events(account: str, query: str, max_results: int = 5) -> list[dict]:
+    """Full-text search upcoming events by `query`. Returns
+    {id, summary, start (tz-aware datetime), all_day}, soonest first."""
+    svc = calendar_service(account)
+    now = datetime.now(timezone.utc)
+    resp = (
+        svc.events()
+        .list(
+            calendarId="primary",
+            q=query,
+            timeMin=now.isoformat(),
+            singleEvents=True,
+            orderBy="startTime",
+            maxResults=max_results,
+        )
+        .execute()
+    )
+    out: list[dict] = []
+    for ev in resp.get("items", []):
+        start = ev.get("start", {})
+        dt_str = start.get("dateTime")
+        if dt_str:
+            sdt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+            out.append({"id": ev["id"], "summary": ev.get("summary", "an event"),
+                        "start": sdt, "all_day": False})
+        elif start.get("date"):
+            out.append({"id": ev["id"], "summary": ev.get("summary", "an event"),
+                        "start": datetime.fromisoformat(start["date"]),
+                        "all_day": True})
+    return out
+
+
+def create_event(
+    account: str, summary: str, start_iso: str, end_iso: str,
+    description: str | None = None,
+) -> dict:
+    """Create a timed event on the primary calendar. start_iso/end_iso are
+    ISO 8601 with an offset (e.g. 2026-05-23T14:00:00+02:00). Returns
+    {id, summary, htmlLink}."""
+    svc = calendar_service(account)
+    body: dict = {
+        "summary": summary,
+        "start": {"dateTime": start_iso},
+        "end": {"dateTime": end_iso},
+    }
+    if description:
+        body["description"] = description
+    ev = svc.events().insert(calendarId="primary", body=body).execute()
+    return {"id": ev.get("id"), "summary": ev.get("summary"),
+            "htmlLink": ev.get("htmlLink")}
+
+
+def move_event(account: str, event_id: str, start_iso: str, end_iso: str) -> dict:
+    """Reschedule an event to a new start/end. Returns {id, summary}."""
+    svc = calendar_service(account)
+    ev = svc.events().patch(
+        calendarId="primary", eventId=event_id,
+        body={"start": {"dateTime": start_iso}, "end": {"dateTime": end_iso}},
+    ).execute()
+    return {"id": ev.get("id"), "summary": ev.get("summary")}
+
+
+def cancel_event(account: str, event_id: str) -> None:
+    """Delete an event from the primary calendar."""
+    svc = calendar_service(account)
+    svc.events().delete(calendarId="primary", eventId=event_id).execute()
+
+
+def respond_to_event(account: str, event_id: str, accept: bool) -> dict:
+    """Set the user's own attendee responseStatus on an invite. Returns
+    {summary, status}. Raises if the user isn't an attendee."""
+    svc = calendar_service(account)
+    ev = svc.events().get(calendarId="primary", eventId=event_id).execute()
+    attendees = ev.get("attendees", [])
+    status = "accepted" if accept else "declined"
+    changed = False
+    for a in attendees:
+        if a.get("self"):
+            a["responseStatus"] = status
+            changed = True
+    if not changed:
+        raise ValueError("you are not an attendee on that event")
+    updated = svc.events().patch(
+        calendarId="primary", eventId=event_id,
+        body={"attendees": attendees}, sendUpdates="all",
+    ).execute()
+    return {"summary": updated.get("summary"), "status": status}
+
+
 def send_email(account: str, to: str, subject: str, body: str) -> None:
     """Send a plain-text email as the authenticated user."""
     import base64
@@ -198,3 +287,182 @@ def unread_messages(account: str, max_results: int = 8) -> list[dict]:
             }
         )
     return msgs
+
+
+# --- Gmail deep ops (Phase 3 new surface) ----------------------------------
+
+
+def _header_map(payload: dict) -> dict[str, str]:
+    return {
+        h["name"].lower(): h["value"]
+        for h in payload.get("headers", [])
+    }
+
+
+def _extract_plain_body(payload: dict) -> str:
+    """Walk a Gmail payload tree and return decoded text. Prefers
+    text/plain; falls back to a crude tag-strip of text/html."""
+    import base64
+    import re
+
+    def _decode(data: str) -> str:
+        return base64.urlsafe_b64decode(data.encode("ascii")).decode(
+            "utf-8", errors="replace"
+        )
+
+    plain: list[str] = []
+    html: list[str] = []
+
+    def walk(part: dict) -> None:
+        mime = part.get("mimeType", "")
+        body = part.get("body", {})
+        data = body.get("data")
+        if data and mime == "text/plain":
+            plain.append(_decode(data))
+        elif data and mime == "text/html":
+            html.append(_decode(data))
+        for sub in part.get("parts", []) or []:
+            walk(sub)
+
+    walk(payload)
+    if plain:
+        return "\n".join(plain).strip()
+    if html:
+        text = re.sub(r"<[^>]+>", " ", "\n".join(html))
+        return re.sub(r"[ \t]+", " ", text).strip()
+    return ""
+
+
+def search_messages(account: str, query: str, max_results: int = 8) -> list[dict]:
+    """Search mail by a Gmail query (any folder). Returns
+    {id, thread_id, from, subject, date, snippet}, newest first."""
+    svc = gmail_service(account)
+    listing = (
+        svc.users()
+        .messages()
+        .list(userId="me", q=query, maxResults=max_results)
+        .execute()
+    )
+    out: list[dict] = []
+    for m in listing.get("messages", []):
+        full = (
+            svc.users()
+            .messages()
+            .get(
+                userId="me",
+                id=m["id"],
+                format="metadata",
+                metadataHeaders=["From", "Subject", "Date"],
+            )
+            .execute()
+        )
+        h = _header_map(full.get("payload", {}))
+        out.append(
+            {
+                "id": m["id"],
+                "thread_id": full.get("threadId"),
+                "from": h.get("from", ""),
+                "subject": h.get("subject", "(no subject)"),
+                "date": h.get("date", ""),
+                "snippet": full.get("snippet", ""),
+            }
+        )
+    return out
+
+
+def get_message(account: str, message_id: str) -> dict:
+    """Full message by id: {id, thread_id, from, to, subject, date, body}."""
+    svc = gmail_service(account)
+    full = (
+        svc.users()
+        .messages()
+        .get(userId="me", id=message_id, format="full")
+        .execute()
+    )
+    payload = full.get("payload", {})
+    h = _header_map(payload)
+    return {
+        "id": message_id,
+        "thread_id": full.get("threadId"),
+        "from": h.get("from", ""),
+        "to": h.get("to", ""),
+        "subject": h.get("subject", "(no subject)"),
+        "date": h.get("date", ""),
+        "body": _extract_plain_body(payload),
+    }
+
+
+def find_one_message(account: str, query: str) -> dict | None:
+    """Best single match for a spoken query — newest message matching it,
+    fully fetched. None if nothing matches."""
+    hits = search_messages(account, query, max_results=1)
+    if not hits:
+        return None
+    return get_message(account, hits[0]["id"])
+
+
+def reply_to_message(account: str, message_id: str, body: str) -> dict:
+    """Reply in-thread to a message. Reuses the original subject (with a
+    Re: prefix) and sets In-Reply-To/References so Gmail threads it.
+    Returns {to, subject}."""
+    import base64
+    from email.mime.text import MIMEText
+
+    svc = gmail_service(account)
+    orig = (
+        svc.users()
+        .messages()
+        .get(
+            userId="me",
+            id=message_id,
+            format="metadata",
+            metadataHeaders=["From", "Subject", "Message-ID", "References"],
+        )
+        .execute()
+    )
+    h = _header_map(orig.get("payload", {}))
+    thread_id = orig.get("threadId")
+    to = h.get("from", "")
+    subject = h.get("subject", "")
+    if subject and not subject.lower().startswith("re:"):
+        subject = f"Re: {subject}"
+    msg_id_hdr = h.get("message-id", "")
+    references = (h.get("references", "") + " " + msg_id_hdr).strip()
+
+    mime = MIMEText(body)
+    mime["to"] = to
+    mime["subject"] = subject
+    if msg_id_hdr:
+        mime["In-Reply-To"] = msg_id_hdr
+    if references:
+        mime["References"] = references
+    raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
+    svc.users().messages().send(
+        userId="me", body={"raw": raw, "threadId": thread_id}
+    ).execute()
+    return {"to": to, "subject": subject}
+
+
+def modify_message(
+    account: str, message_id: str,
+    add: list[str] | None = None, remove: list[str] | None = None,
+) -> None:
+    """Add/remove Gmail label ids on a message. INBOX/UNREAD are labels:
+    archive = remove INBOX; mark read = remove UNREAD."""
+    svc = gmail_service(account)
+    svc.users().messages().modify(
+        userId="me",
+        id=message_id,
+        body={"addLabelIds": add or [], "removeLabelIds": remove or []},
+    ).execute()
+
+
+def archive_message(account: str, message_id: str) -> None:
+    modify_message(account, message_id, remove=["INBOX"])
+
+
+def mark_read(account: str, message_id: str, read: bool = True) -> None:
+    if read:
+        modify_message(account, message_id, remove=["UNREAD"])
+    else:
+        modify_message(account, message_id, add=["UNREAD"])
