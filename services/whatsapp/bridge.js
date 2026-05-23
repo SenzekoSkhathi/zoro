@@ -18,6 +18,19 @@
  *   POST /send {to,text} → {ok, message_id, chat_id}
  *      `to` may be a chat id (NNN@c.us / NNN@g.us) OR a name to fuzzy-match
  *      against existing chats.
+ *   POST /call {to,video,method} → {ok, method, ...}
+ *      Initiate a WhatsApp voice (video:false) or video (video:true) call.
+ *      `to` resolves like /send. `method` is "auto" (default) | "native" |
+ *      "link":
+ *        - native: ring the contact directly via the WhatsApp Web internal
+ *          call store (puppeteer eval; experimental, depends on the WA Web
+ *          build exposing a call-start module).
+ *        - link:   generate a joinable call link and send it to the contact
+ *          as a message (uses the supported createCallLink API; reliable).
+ *        - auto:   try native, fall back to link.
+ *   POST /call_link {type} → {ok, link, type}
+ *      Generate a shareable WhatsApp call link without sending it.
+ *      `type` is "voice" (default) | "video".
  *
  * Env vars: ZORO_WHATSAPP_PORT (default 8767).
  */
@@ -145,6 +158,146 @@ async function unreadChats(limit) {
   return out;
 }
 
+// ---- Calls ----------------------------------------------------------------
+
+/**
+ * Ring a contact directly via the WhatsApp Web internal call store.
+ *
+ * whatsapp-web.js has no public API for outgoing calls, so we reach into
+ * the page's module registry (the same `window.require(...)` mechanism the
+ * library uses for everything else). The call-start module name/signature
+ * is not stable across WA Web builds, so we probe a few known module names
+ * and call-start function names defensively. Returns
+ * {ok:true, module, fn} on success or {ok:false, error, tried} otherwise.
+ */
+async function nativeCall(chatId, isVideo) {
+  return client.pupPage.evaluate(
+    async (chatId, isVideo) => {
+      const tried = [];
+      let wid;
+      try {
+        wid = window.require('WAWebWidFactory').createWid(chatId);
+      } catch (e) {
+        return { ok: false, error: `wid: ${e.message}`, tried };
+      }
+      // Group calls aren't supported here; reject group jids early.
+      if (chatId.endsWith('@g.us')) {
+        return { ok: false, error: 'native call to a group is not supported', tried };
+      }
+
+      const moduleNames = [
+        'WAWebCallStartFunctions',
+        'WAWebApiContactCall',
+        'WAWebCallControlState',
+        'WAWebApiCall',
+      ];
+      // Function names that plausibly *start* a call (and not reject/end/query).
+      const wantsStart = /(start|place|offer|make|begin|out)/i;
+      const skip = /(reject|end|decline|accept|incoming|cancel|terminate|^get|^is|^has|state|listen|subscribe)/i;
+
+      for (const modName of moduleNames) {
+        let mod;
+        try {
+          mod = window.require(modName);
+        } catch (e) {
+          tried.push(`${modName}:missing`);
+          continue;
+        }
+        if (!mod) {
+          tried.push(`${modName}:null`);
+          continue;
+        }
+        const fnNames = Object.keys(mod).filter(
+          (k) =>
+            typeof mod[k] === 'function' &&
+            /call/i.test(k) &&
+            wantsStart.test(k) &&
+            !skip.test(k),
+        );
+        for (const fnName of fnNames) {
+          // Try the two argument shapes seen across builds.
+          try {
+            await mod[fnName]([wid], { isVideo: !!isVideo, isGroupCall: false });
+            return { ok: true, module: modName, fn: fnName, sig: 'array+opts' };
+          } catch (e1) {
+            try {
+              await mod[fnName](wid, !!isVideo);
+              return { ok: true, module: modName, fn: fnName, sig: 'wid+bool' };
+            } catch (e2) {
+              tried.push(`${modName}.${fnName}:${e2.message}`);
+            }
+          }
+        }
+        if (fnNames.length === 0) tried.push(`${modName}:no-start-fn`);
+      }
+      return { ok: false, error: 'no usable call-start module found', tried };
+    },
+    chatId,
+    isVideo,
+  );
+}
+
+/**
+ * Generate a joinable WhatsApp call link of the given type
+ * ("voice" | "video"). Uses the library's supported createCallLink API.
+ */
+async function makeCallLink(callType) {
+  // Start time "now"; WhatsApp treats this as an instant call link.
+  return client.createCallLink(new Date(), callType);
+}
+
+async function placeCall(to, isVideo, method) {
+  const chatId = await resolveChatId(String(to));
+  if (!chatId) {
+    return { http: 404, body: { error: `no chat matching ${JSON.stringify(to)}` } };
+  }
+  const callType = isVideo ? 'video' : 'voice';
+
+  // Native ring (default for "auto" and "native").
+  if (method === 'auto' || method === 'native') {
+    let nat;
+    try {
+      nat = await nativeCall(chatId, isVideo);
+    } catch (e) {
+      nat = { ok: false, error: e.message };
+    }
+    if (nat.ok) {
+      return {
+        http: 200,
+        body: { ok: true, method: 'native', chat_id: chatId, call_type: callType, detail: nat },
+      };
+    }
+    if (method === 'native') {
+      return { http: 502, body: { ok: false, error: nat.error || 'native call failed', detail: nat } };
+    }
+    // else fall through to link
+  }
+
+  // Link fallback (and the explicit "link" method): generate + send a link.
+  try {
+    const link = await makeCallLink(callType);
+    if (!link) {
+      return { http: 502, body: { ok: false, error: 'failed to generate call link' } };
+    }
+    const text =
+      (isVideo ? '📹 Video call' : '📞 Voice call') + ` — tap to join: ${link}`;
+    const sent = await client.sendMessage(chatId, text);
+    return {
+      http: 200,
+      body: {
+        ok: true,
+        method: 'link',
+        chat_id: chatId,
+        call_type: callType,
+        link,
+        message_id: sent.id._serialized,
+      },
+    };
+  } catch (e) {
+    return { http: 500, body: { ok: false, error: e.message } };
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const parsed = url.parse(req.url, true);
   try {
@@ -194,6 +347,52 @@ const server = http.createServer(async (req, res) => {
             message_id: sent.id._serialized,
             chat_id: chatId,
           });
+        } catch (e) {
+          return send(res, 500, { error: e.message });
+        }
+      });
+      return;
+    }
+
+    if (parsed.pathname === '/call' && req.method === 'POST') {
+      if (status !== 'ready') {
+        return send(res, 503, { error: `not ready (${status})` });
+      }
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', async () => {
+        try {
+          const data = JSON.parse(body || '{}');
+          const { to } = data;
+          if (!to) return send(res, 400, { error: 'to required' });
+          const isVideo = !!data.video;
+          const method = ['auto', 'native', 'link'].includes(data.method)
+            ? data.method
+            : 'auto';
+          const r = await placeCall(to, isVideo, method);
+          return send(res, r.http, r.body);
+        } catch (e) {
+          return send(res, 500, { error: e.message });
+        }
+      });
+      return;
+    }
+
+    if (parsed.pathname === '/call_link' && req.method === 'POST') {
+      if (status !== 'ready') {
+        return send(res, 503, { error: `not ready (${status})` });
+      }
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', async () => {
+        try {
+          const data = JSON.parse(body || '{}');
+          const callType = data.type === 'video' ? 'video' : 'voice';
+          const link = await makeCallLink(callType);
+          if (!link) {
+            return send(res, 502, { error: 'failed to generate call link' });
+          }
+          return send(res, 200, { ok: true, type: callType, link });
         } catch (e) {
           return send(res, 500, { error: e.message });
         }

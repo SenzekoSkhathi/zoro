@@ -1310,6 +1310,47 @@ class Zoro(Agent):
 
     @function_tool()
     @_logged
+    async def call_whatsapp(
+        self, context: RunContext, to: str, video: bool = False
+    ) -> str:
+        """Start a WhatsApp voice or video call with a contact.
+
+        State-changing: per your safety contract, read back who you're
+        calling and whether it's voice or video, and get the user's
+        confirmation BEFORE calling this.
+
+        How it works: this first tries to ring the contact directly. If
+        the running WhatsApp Web build won't let us ring them, it falls
+        back to generating a joinable call link and sending it to them as
+        a message — so a call always gets started one way or the other.
+
+        Args:
+            to: Who to call. Either a chat id (e.g. "27821234567@c.us")
+                or a name (substring, case-insensitive) that matches a
+                chat you've talked to before. Must be a person, not a
+                group.
+            video: True for a video call, False (default) for voice.
+        """
+        kind = "video" if video else "voice"
+        try:
+            res = await asyncio.to_thread(
+                zoro_whatsapp.place_call, to, video=video, method="auto"
+            )
+        except LookupError:
+            return f"I couldn't find a WhatsApp chat matching {to!r}."
+        except zoro_whatsapp.WhatsAppNotReady as e:
+            return f"WhatsApp isn't connected: {e}"
+        except Exception as e:  # noqa: BLE001
+            return _whatsapp_error(e)
+        if res.get("method") == "link":
+            return (
+                f"I couldn't ring {to} directly, so I sent them a {kind} "
+                "call link to tap and join."
+            )
+        return f"Started a {kind} call with {to}."
+
+    @function_tool()
+    @_logged
     async def run_powershell(
         self, context: RunContext, command: str
     ) -> str:
