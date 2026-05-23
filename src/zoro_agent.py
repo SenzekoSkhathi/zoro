@@ -179,15 +179,23 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 DISPLAY_TOPIC = "zoro.display"
 
 
-async def publish_display(kind: str, data: dict) -> None:
+async def publish_display(kind: str, data: dict, *, refresh: bool = False) -> None:
     """Push a content card to the web view over the LiveKit data channel.
+
+    `refresh=True` marks the frame as a live update: the web view refreshes
+    the card in place if it's already on screen but does NOT open it if the
+    user has dismissed it. Used by the Spotify watcher to keep the
+    now-playing card in sync without hijacking the display.
 
     Best-effort: a missing room (console mode) or any transport hiccup
     must never break the spoken reply, so all failures are swallowed.
     """
     try:
         room = get_job_context().room
-        payload = json.dumps({"kind": kind, "data": data})
+        frame: dict = {"kind": kind, "data": data}
+        if refresh:
+            frame["refresh"] = True
+        payload = json.dumps(frame)
         await room.local_participant.publish_data(
             payload, reliable=True, topic=DISPLAY_TOPIC
         )
@@ -367,6 +375,104 @@ async def publish_now_playing(delay: float = 0.0) -> None:
         print(f"[zoro] nowplaying publish skipped: {e}")
         return
     await publish_display("nowplaying", cur or {"empty": True})
+
+
+# How often the Spotify watcher polls, in seconds. Idle = nothing playing
+# (poll slowly to spare the API); active = a track is playing; near-end
+# tightens so an automatic roll-over to the next queued song is reflected
+# within a beat instead of up to a full active-poll later.
+_SPOTIFY_POLL_IDLE = 15.0
+_SPOTIFY_POLL_ACTIVE = 4.0
+_SPOTIFY_POLL_NEAR_END = 1.5
+_SPOTIFY_NEAR_END_MS = 6000
+
+
+def _now_playing_sig(cur: dict | None) -> tuple:
+    """Fingerprint of the state that should trigger a fresh push: which
+    track, and whether it's playing. Progress is deliberately excluded —
+    the web view ticks that locally between pushes, so including it would
+    make every poll look like a change."""
+    if not cur:
+        return ("none", False)
+    return (
+        cur.get("track_url") or cur.get("track") or "",
+        bool(cur.get("is_playing")),
+    )
+
+
+async def _watch_spotify() -> None:
+    """Keep the now-playing card in sync with what Spotify is actually
+    doing, without Zoro having to be asked.
+
+    Zoro otherwise only refreshes the card when she runs a Spotify tool, so
+    the common cases — a song ending and the queue advancing, or the user
+    pausing / skipping from the Spotify app itself — left the web view
+    showing a stale track. This polls in the background and re-pushes the
+    card whenever the track or play/pause state changes on its own.
+
+    The pushes are `refresh` frames: they update the card in place if it's
+    on screen but never force it back up once dismissed, so the watcher
+    stays in sync without hijacking the display. Change-detected, so steady
+    playback of a single song is silent.
+
+    Best-effort and self-contained: transient API/network errors back off;
+    an unauthorised Spotify (no cached token) stops the watcher entirely —
+    there's nothing to follow.
+    """
+    last_sig: tuple | None = None
+    errors = 0
+    empties = 0  # consecutive polls reporting nothing playing
+    while True:
+        try:
+            cur = await asyncio.to_thread(zoro_spotify.now_playing)
+            errors = 0
+        except RuntimeError as e:
+            # Not authorised / no token — nothing to watch, so stop cleanly.
+            print(f"[zoro] spotify watch off: {e}", flush=True)
+            return
+        except Exception as e:  # noqa: BLE001 - transient API/network blip
+            errors += 1
+            print(f"[zoro] spotify watch error ({errors}): {e}", flush=True)
+            await asyncio.sleep(min(_SPOTIFY_POLL_IDLE * errors, 60.0))
+            continue
+
+        empties = empties + 1 if cur is None else 0
+
+        # Debounce the "nothing playing" state: a single empty reading is
+        # usually just the gap between two tracks as the queue rolls over.
+        # If we were playing a real track a moment ago, hold off on pushing
+        # the empty card and re-check quickly, so a track change doesn't
+        # flash "Nothing playing" before the next song registers.
+        if (
+            cur is None
+            and empties < 2
+            and last_sig is not None
+            and last_sig[0] != "none"
+        ):
+            await asyncio.sleep(_SPOTIFY_POLL_NEAR_END)
+            continue
+
+        sig = _now_playing_sig(cur)
+        if sig != last_sig:
+            last_sig = sig
+            await publish_display(
+                "nowplaying", cur or {"empty": True}, refresh=True
+            )
+
+        if cur and cur.get("is_playing"):
+            remaining = (cur.get("duration_ms") or 0) - (cur.get("progress_ms") or 0)
+            delay = (
+                _SPOTIFY_POLL_NEAR_END
+                if 0 < remaining <= _SPOTIFY_NEAR_END_MS
+                else _SPOTIFY_POLL_ACTIVE
+            )
+        elif cur is not None:
+            # Paused but a track is still loaded — poll briskly so a resume
+            # (from the app or elsewhere) shows up promptly.
+            delay = _SPOTIFY_POLL_ACTIVE
+        else:
+            delay = _SPOTIFY_POLL_IDLE
+        await asyncio.sleep(delay)
 
 
 _NO_REFLECT_TOOLS = frozenset({
@@ -2850,6 +2956,22 @@ async def entrypoint(ctx: JobContext) -> None:
         ))
 
     await session.start(agent=Zoro(instructions), room=ctx.room)
+
+    # Follow Spotify in the background so the now-playing card stays live
+    # when playback moves on its own (a track finishing, or the user
+    # pausing/skipping from the Spotify app). Cancelled on job shutdown so
+    # it never outlives the session.
+    spotify_task = asyncio.create_task(_watch_spotify())
+
+    async def _stop_spotify_watch() -> None:
+        spotify_task.cancel()
+        try:
+            await spotify_task
+        except asyncio.CancelledError:
+            pass
+
+    ctx.add_shutdown_callback(_stop_spotify_watch)
+
     directive, proactive_text = morning_directive()
     if proactive_text:
         await publish_display("proactive", {"text": proactive_text})

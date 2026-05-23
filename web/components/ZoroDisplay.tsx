@@ -857,7 +857,7 @@ export function ZoroDisplay({
       const text = new TextDecoder().decode(message.payload);
       console.log("[ZoroDisplay] message received", message.topic, text);
       const parsed = JSON.parse(text) as
-        | DisplayCard
+        | (DisplayCard & { refresh?: boolean })
         | { kind: "chat" }
         | { kind: "close"; data: { target: string } };
       if (!parsed?.kind) return;
@@ -897,12 +897,19 @@ export function ZoroDisplay({
         "youtube",
       ]);
       if (!widgetKinds.has(parsed.kind as WidgetKind)) return;
+      const kind = parsed.kind as WidgetKind;
+      const incoming = { ...parsed, ts: Date.now() } as Widget;
+      // A `refresh` frame is a live update (e.g. the Spotify watcher tracking
+      // a track change): refresh the card in place if it's still being shown,
+      // but never open/resurface a card the user has already dismissed.
+      if ("refresh" in parsed && parsed.refresh) {
+        setWidgets((w) => (kind in w ? { ...w, [kind]: incoming } : w));
+        return;
+      }
       // Upsert this kind's widget with a fresh timestamp, then register the
       // open with the shared limiter. The limiter enforces the two-widget max
       // and may evict the oldest surface (a grid widget or the chat panel);
       // the reconcile effect below drops anything that falls out of `allowed`.
-      const incoming = { ...parsed, ts: Date.now() } as Widget;
-      const kind = parsed.kind as WidgetKind;
       setWidgets((w) => ({ ...w, [kind]: incoming }));
       open(kind);
     } catch (e) {
