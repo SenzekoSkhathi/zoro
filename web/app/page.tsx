@@ -151,20 +151,24 @@ export default function Home() {
   // in a plain browser we surface one light "enable audio" tap.
   const [audioPrimed, setAudioPrimed] = useState(false);
   const [inShell, setInShell] = useState(false);
+  const [isOverlay, setIsOverlay] = useState(false);
   useEffect(() => {
     const w = window as unknown as Record<string, unknown>;
-    // Tauri loads our hosted URL as remote content, which doesn't reliably
-    // get the __TAURI__ global injected — so the native shell also tags its
-    // webview with a custom user-agent ("ZoroShell"). Check all three.
     const ua = navigator.userAgent || "";
+    const searchParams = new URLSearchParams(window.location.search);
+    const overlayParam = searchParams.get("overlay") === "true";
     const shell =
       "__TAURI_INTERNALS__" in w ||
       "__TAURI__" in w ||
       ua.includes("ZoroShell") ||
-      new URLSearchParams(window.location.search).get("shell") === "tauri";
+      searchParams.get("shell") === "tauri" ||
+      overlayParam;
     if (shell) {
       setAudioPrimed(true);
       setInShell(true);
+      setIsOverlay(true);
+      document.documentElement.dataset.overlay = "true";
+      document.body.dataset.overlay = "true";
     }
   }, []);
   const primeAudio = useCallback(() => {
@@ -282,20 +286,21 @@ export default function Home() {
   // server-side regardless, but this keeps the locked state clean too.
   if (authed !== true) {
     return (
-      <main className={styles.main}>
-        <HudFrame phase="boot" online={serviceOnline} />
+      <main className={styles.main} data-overlay={isOverlay ? "true" : undefined}>
+        {!isOverlay && <HudFrame phase="boot" online={serviceOnline} />}
         {authed === false && <LoginGate onAuthed={() => setAuthed(true)} />}
       </main>
     );
   }
 
   return (
-    <main className={styles.main}>
-      <HudFrame phase={phase} online={serviceOnline} />
-      <InstrumentRail data={telemetry} />
+    <main className={styles.main} data-overlay={isOverlay ? "true" : undefined}>
+      {!isOverlay && <HudFrame phase={phase} online={serviceOnline} />}
+      {!isOverlay && <InstrumentRail data={telemetry} />}
 
       {phase !== "active" && (
         <div
+          data-tauri-drag-region="true"
           onClick={() => {
             void primeAudio();
             if (phase === "idle") setPhase("connecting");
@@ -307,7 +312,7 @@ export default function Home() {
         </div>
       )}
 
-      {phase !== "active" && (
+      {phase !== "active" && !isOverlay && (
         <div className={styles.activateDock}>
           <button
             className={styles.button}
@@ -343,17 +348,19 @@ export default function Home() {
           video={false}
           onDisconnected={endCall}
           className={styles.room}
+          data-overlay={isOverlay ? "true" : undefined}
         >
           <RoomAudioRenderer />
           <ZoroConversation
             onEnd={endCall}
             onDeactivate={deactivate}
             onContentChange={setContentShown}
+            isOverlay={isOverlay}
           />
         </LiveKitRoom>
       )}
 
-      {phase !== "active" && !serviceOnline && (
+      {phase !== "active" && !serviceOnline && !isOverlay && (
         <p className={styles.heard}>
           wake service offline — click orb or tap to speak
         </p>
@@ -371,10 +378,12 @@ function ZoroConversation({
   onEnd,
   onDeactivate,
   onContentChange,
+  isOverlay = false,
 }: {
   onEnd: () => void;
   onDeactivate: () => void;
   onContentChange: (shown: boolean) => void;
+  isOverlay?: boolean;
 }) {
   const { state, audioTrack } = useVoiceAssistant();
   const { microphoneTrack } = useLocalParticipant();
@@ -459,8 +468,8 @@ function ZoroConversation({
       : "listening";
 
   return (
-    <div className={styles.room}>
-      {contentShown && (
+    <div className={styles.room} data-overlay={isOverlay ? "true" : undefined}>
+      {contentShown && !isOverlay && (
         <span
           className={styles.beam}
           aria-hidden
@@ -472,20 +481,22 @@ function ZoroConversation({
           }}
         />
       )}
-      <Orb
-        mode={faceMode}
-        energy={energy}
-        accent={accent}
-        docked={contentShown}
-      />
-      {!contentShown && (
-        <p className={styles.state}>{state ?? "connecting"}</p>
-      )}
-      <ToolTicker />
       <WidgetLimitProvider>
         <ZoroDisplay onActiveChange={setCardActive} />
         <Transcript onActiveChange={setChatActive} />
       </WidgetLimitProvider>
+      <div data-tauri-drag-region="true" style={{ cursor: "grab" }}>
+        <Orb
+          mode={faceMode}
+          energy={energy}
+          accent={accent}
+          docked={contentShown && !isOverlay}
+        />
+      </div>
+      {!contentShown && !isOverlay && (
+        <p className={styles.state}>{state ?? "connecting"}</p>
+      )}
+      {!isOverlay && <ToolTicker />}
     </div>
   );
 }

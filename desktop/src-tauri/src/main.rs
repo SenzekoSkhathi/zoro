@@ -88,6 +88,25 @@ fn main() {
                 })
                 .build(app)?;
 
+            // Anchor the floating window to the bottom-right of the primary display
+            if let Some(win) = app.get_webview_window("main") {
+                if let Ok(Some(monitor)) = win.primary_monitor() {
+                    let screen_size = monitor.size();
+                    let scale = monitor.scale_factor();
+                    let win_w = (500.0 * scale) as i32;
+                    let win_h = (860.0 * scale) as i32;
+                    let pos_x = (screen_size.width as i32) - win_w - (20.0 * scale) as i32;
+                    let pos_y = (screen_size.height as i32) - win_h - (60.0 * scale) as i32;
+                    let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }));
+                }
+
+                if let Ok(url_str) = std::env::var("ZORO_OVERLAY_URL") {
+                    if let Ok(target) = url_str.parse() {
+                        let _ = win.navigate(target);
+                    }
+                }
+            }
+
             // Cold-start wake: if the wake service launched us from scratch
             // with --wake, the remote page needs a moment to load and define
             // window.__zoroWake before we call it.

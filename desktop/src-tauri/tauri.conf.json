@@ -11,14 +11,16 @@
       {
         "label": "main",
         "title": "Zoro",
-        "url": "https://zoro-pi-tawny.vercel.app",
-        "width": 1280,
-        "height": 820,
-        "minWidth": 900,
-        "minHeight": 600,
+        "url": "https://zoro-pi-tawny.vercel.app?overlay=true",
+        "width": 500,
+        "height": 860,
         "resizable": true,
-        "center": true,
-        "decorations": true,
+        "center": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "shadow": false,
+        "skipTaskbar": true,
         "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0 ZoroShell/0.1",
         "additionalBrowserArgs": "--autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream"
       }

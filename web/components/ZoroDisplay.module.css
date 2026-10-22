@@ -15,6 +15,18 @@
   width: min(1240px, 94vw);
 }
 
+:global(body[data-overlay="true"]) .grid {
+  width: 100%;
+  max-width: 460px;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  gap: 1rem;
+}
+
 .answer {
   margin: 0;
   font-size: 0.98rem;

@@ -39,6 +39,13 @@
   animation: decode 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+:global(body[data-overlay="true"]) .panel {
+  width: 100%;
+  max-width: 440px;
+  max-height: 52vh;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 15px rgba(79, 227, 255, 0.2);
+}
+
 .panel[data-accent="gold"] {
   --accent: #ffc46b;
   --accent-soft: rgba(255, 196, 107, 0.5);

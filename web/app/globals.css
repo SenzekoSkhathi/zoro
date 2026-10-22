@@ -30,6 +30,13 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+body[data-overlay="true"],
+html[data-overlay="true"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  overflow: hidden;
+}
+
 * {
   box-sizing: border-box;
   padding: 0;

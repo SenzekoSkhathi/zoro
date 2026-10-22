@@ -28,6 +28,21 @@
   background-color: #04080d;
 }
 
+.main[data-overlay="true"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  min-height: 100vh;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1.5rem 1rem;
+  overflow: visible;
+}
+
 /* Energy beam projected from the docked orb toward the content panel —
    sells "Zoro is rendering this". Fixed-anchored near the orb corner,
    angled up toward centre, with a pulse travelling along it. */
@@ -449,6 +464,17 @@
   align-items: center;
   gap: 1.25rem;
   background: transparent !important;
+}
+
+.room[data-overlay="true"] {
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 1.5rem;
+  padding-bottom: 0.5rem;
 }
 
 .visualizer {
