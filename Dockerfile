@@ -17,10 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     portaudio19-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install python dependencies
-COPY requirements.txt .
+# Install python dependencies for Cloud Core
+COPY requirements-server.txt .
 RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+    pip install -r requirements-server.txt
 
 # Copy application source code
 COPY src/ ./src/
