@@ -168,7 +168,9 @@ type DisplayCard =
   | { kind: "github"; data: GitHubData }
   | { kind: "shell"; data: ShellData }
   | { kind: "whatsapp"; data: WhatsAppData }
-  | { kind: "youtube"; data: YouTubeData };
+  | { kind: "youtube"; data: YouTubeData }
+  | { kind: "system"; data: any }
+  | { kind: "browser"; data: any };
 
 type WidgetKind = DisplayCard["kind"];
 
@@ -807,6 +809,54 @@ function ClaudeCard({
   );
 }
 
+function SystemCard({ data, onClose }: { data: any; onClose: () => void }) {
+  const { battery, cpu_percent, memory, disk, summary } = data || {};
+  return (
+    <HudPanel kind="SYSTEM" meta="DIAGNOSTICS" ariaLabel="System Telemetry" onClose={onClose}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "12px" }}>
+        <div style={{ background: "rgba(10, 25, 35, 0.6)", padding: "10px", borderRadius: "6px", border: "1px solid rgba(79, 227, 255, 0.2)" }}>
+          <div style={{ fontSize: "0.68rem", color: "#74aec4", letterSpacing: "0.15em", textTransform: "uppercase" }}>Battery</div>
+          <div style={{ fontSize: "1.3rem", fontWeight: 700, color: (battery?.percent || 100) < 20 ? "#ff5c77" : "#a6e9ff" }}>
+            {battery?.available ? `${battery.percent}%` : "AC Power"}
+          </div>
+          <div style={{ fontSize: "0.72rem", color: "#5fb4cf" }}>
+            {battery?.available ? (battery.power_plugged ? "Charging" : "Discharging") : "Desktop PC"}
+          </div>
+        </div>
+
+        <div style={{ background: "rgba(10, 25, 35, 0.6)", padding: "10px", borderRadius: "6px", border: "1px solid rgba(79, 227, 255, 0.2)" }}>
+          <div style={{ fontSize: "0.68rem", color: "#74aec4", letterSpacing: "0.15em", textTransform: "uppercase" }}>CPU Usage</div>
+          <div style={{ fontSize: "1.3rem", fontWeight: 700, color: (cpu_percent || 0) > 80 ? "#ffaa40" : "#a6e9ff" }}>
+            {Math.round(cpu_percent || 0)}%
+          </div>
+          <div style={{ fontSize: "0.72rem", color: "#5fb4cf" }}>Active Utilization</div>
+        </div>
+
+        <div style={{ background: "rgba(10, 25, 35, 0.6)", padding: "10px", borderRadius: "6px", border: "1px solid rgba(79, 227, 255, 0.2)" }}>
+          <div style={{ fontSize: "0.68rem", color: "#74aec4", letterSpacing: "0.15em", textTransform: "uppercase" }}>Memory (RAM)</div>
+          <div style={{ fontSize: "1.3rem", fontWeight: 700, color: (memory?.percent || 0) > 85 ? "#ffaa40" : "#a6e9ff" }}>
+            {Math.round(memory?.percent || 0)}%
+          </div>
+          <div style={{ fontSize: "0.72rem", color: "#5fb4cf" }}>
+            {memory?.used_gb} GB / {memory?.total_gb} GB
+          </div>
+        </div>
+
+        <div style={{ background: "rgba(10, 25, 35, 0.6)", padding: "10px", borderRadius: "6px", border: "1px solid rgba(79, 227, 255, 0.2)" }}>
+          <div style={{ fontSize: "0.68rem", color: "#74aec4", letterSpacing: "0.15em", textTransform: "uppercase" }}>Disk (C:)</div>
+          <div style={{ fontSize: "1.3rem", fontWeight: 700, color: (disk?.percent || 0) > 90 ? "#ff5c77" : "#a6e9ff" }}>
+            {disk?.free_gb} GB free
+          </div>
+          <div style={{ fontSize: "0.72rem", color: "#5fb4cf" }}>
+            {Math.round(disk?.percent || 0)}% utilized
+          </div>
+        </div>
+      </div>
+      {summary && <p className={styles.answer} style={{ fontSize: "0.85rem", opacity: 0.9 }}>{summary}</p>}
+    </HudPanel>
+  );
+}
+
 function weatherGlyph(condition: string): string {
   const c = condition.toLowerCase();
   if (c.includes("thunder")) return "⛈";
@@ -1255,6 +1305,10 @@ function renderWidget(w: Widget, onClose: () => void) {
         <p className={styles.answer}>{answer}</p>
       </HudPanel>
     );
+  }
+
+  if (w.kind === "system") {
+    return <SystemCard key={w.kind} data={w.data} onClose={onClose} />;
   }
 
   return null;

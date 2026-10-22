@@ -866,22 +866,87 @@ class Zoro(Agent):
     @function_tool()
     @_logged
     async def open_app(self, context: RunContext, app_name: str) -> str:
-        """Open an application on the user's Windows computer.
+        """Open an installed Windows application by name.
+
+        Fuzzy-matches against the Start Menu and installed apps (Spotify,
+        Discord, VS Code, Chrome, Calculator, Notepad, Settings, etc.). Spoken
+        names and partial names are supported.
 
         Args:
-            app_name: The app the user wants opened, e.g. "notepad",
-                "calculator", "chrome", "settings". Spoken names are fine.
+            app_name: The app the user wants opened, e.g. "spotify", "notepad", "calculator".
         """
-        key = app_name.strip().lower()
-        target = APP_ALIASES.get(key, key)
+        key = app_name.strip()
         try:
-            # `start` resolves apps via Windows App Paths / PATH. Args are
-            # passed as a list (no shell=True) so the app name isn't a shell
-            # injection vector; the empty "" is start's window-title arg.
+            match = await asyncio.to_thread(zoro_shell.open_app, key)
+            return f"Opening {match['name']}."
+        except LookupError:
+            pass
+        except Exception:
+            pass
+
+        target = APP_ALIASES.get(key.lower(), key)
+        try:
             subprocess.Popen(["cmd", "/c", "start", "", target])
+            return f"Opening {app_name}."
         except OSError as e:
             return f"I couldn't open {app_name}: {e}"
-        return f"Opening {app_name}."
+
+    @function_tool()
+    @_logged
+    async def get_system_status(self, context: RunContext) -> str:
+        """Check the computer's live hardware status and health.
+
+        Returns battery level, charging status, time remaining, CPU usage,
+        RAM utilization, and free disk space. Use whenever the user asks
+        "how's my battery?", "am I charging?", "how much RAM do I have free?",
+        "check system resources", "how's the PC doing?", or "is my disk full?".
+        """
+        try:
+            res = await asyncio.to_thread(zoro_tools.get_system_telemetry)
+        except Exception as e:
+            return f"I couldn't read system telemetry: {e}"
+        await publish_display("system", res)
+        return res.get("summary", "System status retrieved.")
+
+    @function_tool()
+    @_logged
+    async def list_running_apps(
+        self, context: RunContext, limit: int = 10
+    ) -> str:
+        """List active user applications and processes sorted by memory usage.
+
+        Use when the user asks "what's running?", "what apps are open?",
+        or to identify process names before closing or terminating an app.
+
+        Args:
+            limit: Number of top processes to return (default 10, max 20).
+        """
+        try:
+            clamped = min(max(limit, 3), 20)
+            procs = await asyncio.to_thread(zoro_tools.list_running_processes, clamped)
+        except Exception as e:
+            return f"I couldn't list running processes: {e}"
+        if not procs:
+            return "No user processes found."
+        names = [f"{p['name']} ({p['memory_mb']} MB)" for p in procs[:clamped]]
+        return f"Top {len(names)} active processes: " + ", ".join(names)
+
+    @function_tool()
+    @_logged
+    async def terminate_app(self, context: RunContext, name: str) -> str:
+        """Close or terminate a running application or process by name or PID.
+
+        STATE-CHANGING: can cause unsaved work to be lost. Confirm with the user
+        before terminating an application if they did not explicitly command it.
+
+        Args:
+            name: Process name (e.g. 'notepad', 'spotify', 'chrome') or numeric PID.
+        """
+        try:
+            res = await asyncio.to_thread(zoro_tools.terminate_process, name)
+        except Exception as e:
+            return f"Failed to terminate process: {e}"
+        return res.get("message", "Done.")
 
     @function_tool()
     @_logged
@@ -961,7 +1026,7 @@ class Zoro(Agent):
             res = await asyncio.to_thread(
                 zoro_tools.describe_screen_detailed,
                 question,
-                os.environ["ANTHROPIC_API_KEY"],
+                os.environ.get("ANTHROPIC_API_KEY", ""),
             )
         except Exception as e:  # noqa: BLE001 - report failure aloud
             return f"I couldn't read the screen: {e}"
@@ -1298,7 +1363,7 @@ class Zoro(Agent):
         """
         try:
             return await asyncio.to_thread(
-                zoro_computer.run_task, task, os.environ["ANTHROPIC_API_KEY"]
+                zoro_computer.run_task, task, os.environ.get("ANTHROPIC_API_KEY", "")
             )
         except Exception as e:  # noqa: BLE001 - report aloud
             return f"My computer control failed: {e}"
@@ -1628,22 +1693,12 @@ class Zoro(Agent):
     async def open_installed_app(
         self, context: RunContext, name: str
     ) -> str:
-        """Open an installed Windows app by name.
-
-        Fuzzy-matches against the Start Menu, so casual names like
-        "spotify", "discord", "chrome", "vscode" all work. Use for
-        any "open X" / "launch X" voice command.
+        """Alias for open_app: open an installed Windows app by name.
 
         Args:
             name: App name. Partial / fuzzy match is fine.
         """
-        try:
-            match = await asyncio.to_thread(zoro_shell.open_app, name)
-        except LookupError:
-            return f"I couldn't find an installed app matching {name!r}."
-        except Exception as e:  # noqa: BLE001
-            return f"I couldn't open it: {e}"
-        return f"Opening {match['name']}."
+        return await self.open_app(context, name)
 
     @function_tool()
     @_logged

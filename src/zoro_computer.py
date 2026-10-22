@@ -209,6 +209,9 @@ def _classify_run(final: str) -> tuple[str, int]:
 
 
 def _run_task_inner(task: str, api_key: str) -> tuple[str, int]:
+    if not api_key:
+        return "Computer control requires an active computer-use API key. Please use deterministic desktop tools instead.", 0
+
     nw, nh = _screen_size()
     tw, th = _scaled_dims(nw, nh)
     sx, sy = nw / float(tw), nh / float(th)

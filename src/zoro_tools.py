@@ -1073,3 +1073,150 @@ def clipboard_get() -> str:
             u32.CloseClipboard()
     except OSError:
         return ""
+
+
+# --- System & Hardware Telemetry (psutil) -----------------------------------
+
+
+def get_system_telemetry() -> dict:
+    """Return live system resource statistics: battery, cpu, memory, disk."""
+    import os
+    import psutil
+
+    # Battery
+    battery_info: dict = {"available": False}
+    try:
+        batt = psutil.sensors_battery()
+        if batt is not None:
+            secs = None
+            if batt.secsleft not in (getattr(psutil, "POWER_TIME_UNLIMITED", -1), getattr(psutil, "POWER_TIME_UNKNOWN", -2)):
+                if batt.secsleft > 0:
+                    secs = int(batt.secsleft)
+            battery_info = {
+                "available": True,
+                "percent": int(batt.percent),
+                "power_plugged": bool(batt.power_plugged),
+                "secsleft": secs,
+            }
+    except Exception:
+        pass
+
+    # CPU
+    cpu_percent = 0.0
+    try:
+        cpu_percent = float(psutil.cpu_percent(interval=0.1))
+    except Exception:
+        pass
+
+    # RAM
+    ram_info: dict = {"percent": 0.0, "used_gb": 0.0, "total_gb": 0.0}
+    try:
+        vmem = psutil.virtual_memory()
+        ram_info = {
+            "percent": float(vmem.percent),
+            "used_gb": round(vmem.used / (1024 ** 3), 1),
+            "total_gb": round(vmem.total / (1024 ** 3), 1),
+        }
+    except Exception:
+        pass
+
+    # Disk (C: drive on Windows or root /)
+    disk_info: dict = {"percent": 0.0, "free_gb": 0.0, "total_gb": 0.0}
+    try:
+        drive = "C:" if os.name == "nt" else "/"
+        du = psutil.disk_usage(drive)
+        disk_info = {
+            "percent": float(du.percent),
+            "free_gb": round(du.free / (1024 ** 3), 1),
+            "total_gb": round(du.total / (1024 ** 3), 1),
+        }
+    except Exception:
+        pass
+
+    # Build natural spoken summary
+    parts = []
+    if battery_info["available"]:
+        plugged_str = "plugged in" if battery_info["power_plugged"] else "unplugged"
+        mins_left = ""
+        if battery_info["secsleft"]:
+            m = battery_info["secsleft"] // 60
+            mins_left = f", about {m} minutes remaining"
+        parts.append(f"Battery is at {battery_info['percent']}% ({plugged_str}{mins_left})")
+
+    parts.append(f"CPU is at {int(cpu_percent)}%")
+    parts.append(f"RAM is using {ram_info['used_gb']} GB of {ram_info['total_gb']} GB ({int(ram_info['percent'])}%)")
+    parts.append(f"C drive has {disk_info['free_gb']} GB free ({int(disk_info['percent'])}% used)")
+
+    summary = ". ".join(parts) + "."
+
+    return {
+        "battery": battery_info,
+        "cpu_percent": cpu_percent,
+        "memory": ram_info,
+        "disk": disk_info,
+        "summary": summary,
+    }
+
+
+def list_running_processes(limit: int = 15) -> list[dict]:
+    """Return top user/GUI processes sorted by memory usage."""
+    import psutil
+
+    ignore = {"system idle process", "system", "registry", "smss.exe", "csrss.exe"}
+    procs = []
+    for p in psutil.process_iter(["pid", "name", "memory_info", "cpu_percent"]):
+        try:
+            info = p.info
+            name = info.get("name") or ""
+            if not name or name.lower() in ignore:
+                continue
+            mem_mb = round((info["memory_info"].rss if info.get("memory_info") else 0) / (1024 * 1024), 1)
+            procs.append({
+                "pid": info["pid"],
+                "name": name,
+                "memory_mb": mem_mb,
+                "cpu_percent": info.get("cpu_percent") or 0.0,
+            })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    procs.sort(key=lambda x: -x["memory_mb"])
+    return procs[:limit]
+
+
+def terminate_process(target: str | int) -> dict:
+    """Terminate a process by name (e.g. 'notepad.exe') or PID."""
+    import psutil
+
+    pid = None
+    if isinstance(target, int):
+        pid = target
+    elif str(target).isdigit():
+        pid = int(target)
+
+    if pid is not None:
+        try:
+            p = psutil.Process(pid)
+            name = p.name()
+            p.terminate()
+            p.wait(timeout=3)
+            return {"ok": True, "message": f"Terminated process {name} (PID {pid})."}
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired) as e:
+            return {"ok": False, "message": f"Could not terminate PID {pid}: {e}"}
+
+    name_needle = str(target).lower().strip()
+    name_needle_exe = name_needle if name_needle.endswith(".exe") else f"{name_needle}.exe"
+
+    killed = []
+    for p in psutil.process_iter(["pid", "name"]):
+        try:
+            pname = (p.info["name"] or "").lower()
+            if pname == name_needle or pname == name_needle_exe or (len(name_needle) >= 4 and name_needle in pname):
+                p.terminate()
+                killed.append(f"{p.info['name']} (PID {p.info['pid']})")
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    if not killed:
+        return {"ok": False, "message": f"No running process found matching '{target}'."}
+    return {"ok": True, "message": f"Terminated: {', '.join(killed)}."}
