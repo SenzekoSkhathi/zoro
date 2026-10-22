@@ -76,5 +76,11 @@ $deploymentArgs = @(
 
 az @deploymentArgs
 
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`n[ERROR] Azure deployment failed with exit code $LASTEXITCODE" -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+
 Write-Host "`n[SUCCESS] Zoro 24/7 Cloud Core deployed successfully to baseform-env-za!" -ForegroundColor Green
 Write-Host "Zoro is now running 24/7 in the cloud. You no longer need to run python on localhost!" -ForegroundColor Cyan
+

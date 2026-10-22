@@ -12,16 +12,6 @@ param containerAppName string = 'zoro-agent'
 @description('The container image to deploy.')
 param containerImage string = 'ghcr.io/senzekoskhathi/zoro:latest'
 
-@description('Registry server (e.g. ghcr.io or baseformacrza.azurecr.io).')
-param registryServer string = 'ghcr.io'
-
-@description('Registry username (e.g. SenzekoSkhathi).')
-param registryUsername string = ''
-
-@secure()
-@description('Registry password or GitHub Personal Access Token.')
-param registryPassword string = ''
-
 // --- Secrets ---
 @secure()
 param azureOpenAiApiKey string = ''
@@ -75,10 +65,6 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       activeRevisionsMode: 'Single'
       secrets: [
         {
-          name: 'reg-password'
-          value: registryPassword
-        }
-        {
           name: 'azure-openai-key'
           value: azureOpenAiApiKey
         }
@@ -131,13 +117,6 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           value: googleOauthClientSecret
         }
       ]
-      registries: !empty(registryUsername) ? [
-        {
-          server: registryServer
-          username: registryUsername
-          passwordSecretRef: 'reg-password'
-        }
-      ] : []
     }
     template: {
       containers: [

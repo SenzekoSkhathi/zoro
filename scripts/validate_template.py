@@ -11,3 +11,4 @@ assert t["resources"][0]["type"] == "Microsoft.App/containerApps"
 print(f"ARM template valid! Target type: {t['resources'][0]['type']}")
 print(f"Containers: {len(t['resources'][0]['properties']['template']['containers'])}")
 print(f"Environment variables configured: {len(t['resources'][0]['properties']['template']['containers'][0]['env'])}")
+
