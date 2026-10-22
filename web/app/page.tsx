@@ -335,7 +335,11 @@ export default function Home() {
           token={token}
           serverUrl={SERVER_URL}
           connect
-          audio
+          audio={{
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          }}
           video={false}
           onDisconnected={endCall}
           className={styles.room}

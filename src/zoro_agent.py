@@ -41,7 +41,7 @@ from livekit.agents import (
     function_tool,
     get_job_context,
 )
-from livekit.plugins import anthropic, cartesia, deepgram, openai, silero
+from livekit.plugins import anthropic, azure, cartesia, deepgram, openai, silero
 
 import zoro_claude_code
 import zoro_computer
@@ -2843,10 +2843,12 @@ def morning_directive() -> tuple[str, str | None]:
 
 async def entrypoint(ctx: JobContext) -> None:
     # Pass keys explicitly — plugin env-var names differ from our .env
-    # names, and STT and TTS both ride on the single DEEPGRAM_API_KEY.
+    # names, and STT and TTS ride on Azure AI Services by default.
     azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
     azure_key = os.environ.get("AZURE_OPENAI_API_KEY")
     azure_deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-6-sol")
+    azure_speech_region = os.environ.get("AZURE_SPEECH_REGION", "eastus2")
+    azure_speech_voice = os.environ.get("AZURE_SPEECH_VOICE", "en-GB-SoniaNeural")
 
     if azure_endpoint and azure_key:
         active_llm = openai.LLM.with_azure(
@@ -2870,54 +2872,54 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         llm_label = "anthropic(sonnet-4-5)"
 
-    session = AgentSession(
-        stt=deepgram.STT(
-            model="nova-3", language="en", api_key=os.environ["DEEPGRAM_API_KEY"]
-        ),
-        llm=active_llm,
-        # Local Kokoro-FastAPI (OpenAI-compatible) — runs at localhost:8880,
-        # zero API cost. Voice bf_alice = British female. If the local server
-        # is down, falls back to Deepgram Aura.
-        # Cartesia Sonic — cloud TTS with native streaming. Replaced local
-        # Kokoro because CPU inference couldn't sustain realtime on this box
-        # and caused mid-sentence underruns. Voice: Victoria (British female,
-        # crisp/professional). Sonic-2 is Cartesia's lowest-latency model.
-        tts=cartesia.TTS(
+    # Audio Pipeline: 100% Microsoft Azure AI Speech (zero extra third-party subscriptions)
+    # Falls back to Deepgram/Cartesia only if Azure speech key is not available.
+    if azure_key:
+        active_stt = azure.STT(
+            language="en-US",
+            speech_key=azure_key,
+            speech_region=azure_speech_region,
+        )
+        active_tts = azure.TTS(
+            voice=azure_speech_voice,
+            speech_key=azure_key,
+            speech_region=azure_speech_region,
+        )
+        stt_label = f"azure-speech-stt({azure_speech_region})"
+        tts_label = f"azure-neural-tts({azure_speech_voice})"
+    else:
+        active_stt = deepgram.STT(
+            model="nova-3", language="en", api_key=os.environ.get("DEEPGRAM_API_KEY", "")
+        )
+        active_tts = cartesia.TTS(
             model="sonic-2",
             voice="dc30854e-e398-4579-9dc8-16f6cb2c19b9",
-            api_key=os.environ["CARTESIA_API_KEY"],
-        ),
+            api_key=os.environ.get("CARTESIA_API_KEY", ""),
+        )
+        stt_label = "deepgram(nova-3)"
+        tts_label = "cartesia(sonic-2/Victoria)"
+
+    session = AgentSession(
+        stt=active_stt,
+        llm=active_llm,
+        tts=active_tts,
         vad=_VAD,
-        # Phase 2 barge-in polish: migrated off the deprecated flat kwargs
-        # onto the TurnHandlingOptions TypedDict (single source of truth for
-        # turn behaviour going forward). Snappier interrupt min_duration
-        # than the default 0.5s so the user doesn't have to talk over Zoro
-        # for half a second to cut her off; adaptive mode lets the SDK
-        # distinguish real interrupts from short backchannels ("mm-hm").
         turn_handling={
-            "endpointing": {"min_delay": 0.3, "max_delay": 3.0},
+            "endpointing": {"min_delay": 0.25, "max_delay": 3.0},
             "interruption": {
                 "enabled": True,
                 "mode": "adaptive",
-                # Require ~0.6s of sustained speech before cutting Zoro off.
-                # Lower values (0.35s) tripped on coughs, keyboard taps, and
-                # ambient TV/voices; 0.6s is long enough that incidental
-                # noise is filtered but a real "wait —" still barges in.
-                "min_duration": 0.6,
-                # Resume mid-sentence if the apparent interrupt turned out
-                # to be a cough / backchannel within the timeout window.
-                # Wider window so the SDK has more time to retroactively
-                # classify a false-positive and resume speaking.
+                "min_duration": 0.5,
                 "resume_false_interruption": True,
                 "false_interruption_timeout": 3.0,
                 "discard_audio_if_uninterruptible": True,
             },
-            "preemptive_generation": {"enabled": True, "preemptive_tts": False},
+            "preemptive_generation": {"enabled": True, "preemptive_tts": True},
         },
     )
 
-    print(f"[zoro] session config: TTS=cartesia(sonic-2/Gemma) "
-          f"STT=deepgram(nova-3) LLM={llm_label} MCP=off",
+    print(f"[zoro] session config: TTS={tts_label} "
+          f"STT={stt_label} LLM={llm_label} MCP=off",
           flush=True)
     instructions = await asyncio.to_thread(build_instructions)
 
