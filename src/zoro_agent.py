@@ -12,6 +12,7 @@ import functools
 import inspect
 import json
 import os
+import random
 import subprocess
 import sys
 import time
@@ -500,6 +501,103 @@ async def publish_tool_event(name: str, phase: str, ms: int | None = None) -> No
     await publish_display("tool", data)
 
 
+# --- Tool Latency Concealment (Verbal fillers for slow / networked tools) ---
+TOOL_FILLERS: dict[str, list[str]] = {
+    "web_search": [
+        "Looking that up, Sir...",
+        "Searching the web for you...",
+        "Let me check that on the web...",
+    ],
+    "describe_screen": [
+        "Taking a look at your screen now...",
+        "Looking at your display, Sir...",
+    ],
+    "check_calendar": [
+        "Checking your schedule, Sir...",
+        "Looking at your calendar...",
+    ],
+    "create_calendar_event": [
+        "Adding that to your calendar, Sir...",
+    ],
+    "reschedule_calendar_event": [
+        "Updating your calendar, Sir...",
+    ],
+    "cancel_calendar_event": [
+        "Cancelling that calendar event...",
+    ],
+    "check_email": [
+        "Checking your inbox, Sir...",
+        "Looking for new messages...",
+    ],
+    "read_email": [
+        "Opening that email for you...",
+    ],
+    "send_email": [
+        "Sending that email now, Sir...",
+    ],
+    "send_whatsapp_message": [
+        "Sending that on WhatsApp, Sir...",
+    ],
+    "read_whatsapp_messages": [
+        "Checking your WhatsApp messages...",
+    ],
+    "play_music": [
+        "Putting that on Spotify, Sir...",
+        "Queueing that track up...",
+    ],
+    "play_my_playlist": [
+        "Loading your playlist on Spotify...",
+    ],
+    "whats_playing": [
+        "Checking what's playing...",
+    ],
+    "morning_briefing": [
+        "Gathering your morning briefing, Sir...",
+        "Pulling together your briefing now...",
+    ],
+    "read_document": [
+        "Reading through that document now, Sir...",
+    ],
+    "ask_claude_code": [
+        "Handing that task to Claude Code now, Sir...",
+    ],
+    "where_am_i": [
+        "Checking your location...",
+    ],
+    "find_files": [
+        "Searching for those files, Sir...",
+    ],
+}
+
+_last_filler_time: float = 0.0
+_FILLER_COOLDOWN_SECONDS: float = 4.0
+
+
+def _should_speak_filler() -> bool:
+    global _last_filler_time
+    now = time.monotonic()
+    if now - _last_filler_time < _FILLER_COOLDOWN_SECONDS:
+        return False
+    _last_filler_time = now
+    return True
+
+
+def _get_tool_filler(tool_name: str) -> str | None:
+    options = TOOL_FILLERS.get(tool_name)
+    if not options:
+        return None
+    return random.choice(options)
+
+
+async def _speak_filler(session, text: str) -> None:
+    """Deliver an immediate low-latency spoken filler to mask tool execution delay.
+    add_to_chat_ctx=False prevents polluting the conversation history."""
+    try:
+        await session.say(text, add_to_chat_ctx=False, allow_interruptions=True)
+    except Exception:
+        pass
+
+
 def _logged(fn):
     """Wrap a function_tool method so every call writes a zoro_episodes row.
 
@@ -519,6 +617,13 @@ def _logged(fn):
         result: object = None
         # Live HUD ticker: announce the tool firing before we run it.
         asyncio.create_task(publish_tool_event(tool_name, "active"))
+
+        # Tool Latency Concealment: emit an immediate natural filler so the user never experiences dead silence
+        session = getattr(context, "session", None)
+        filler = _get_tool_filler(tool_name)
+        if filler and session and _should_speak_filler():
+            asyncio.create_task(_speak_filler(session, filler))
+
         try:
             result = await fn(self, context, *args, **kwargs)
             if isinstance(result, str) and zoro_episodes.looks_like_failure(result):
@@ -2553,6 +2658,7 @@ class Zoro(Agent):
         return f"Playing your {res['name']} playlist."
 
     @function_tool()
+    @_logged
     async def morning_briefing(self, context: RunContext) -> str:
         """Gather the morning briefing facts: date & time, location, weather
         (including any rain heads-up), and top news.

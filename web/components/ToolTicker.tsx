@@ -18,6 +18,37 @@ type Entry = {
   ts: number;
 };
 
+function playThinkingChime() {
+  try {
+    const Ctx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = "sine";
+    // Soft, pleasant double-harmonic frequency (520Hz -> 780Hz)
+    osc.frequency.setValueAtTime(520, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(780, ctx.currentTime + 0.06);
+
+    // Subtle gentle volume (0.025)
+    gain.gain.setValueAtTime(0.001, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.025, ctx.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.14);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start();
+    osc.stop(ctx.currentTime + 0.15);
+  } catch {
+    /* best-effort audio earcon */
+  }
+}
+
 /**
  * Live activity ticker — shows the tool Zoro is invoking right now and its
  * outcome, so the HUD reflects real backend work in real time. Driven by
@@ -37,6 +68,7 @@ export function ToolTicker() {
       ) as Partial<ToolFrame>;
       if (parsed?.kind !== "tool" || !parsed.data?.name) return;
       const { name, phase, ms } = parsed.data;
+      if (phase === "active") playThinkingChime();
       setEntry({ name, phase, ms, ts: Date.now() });
 
       if (clearTimer.current) clearTimeout(clearTimer.current);

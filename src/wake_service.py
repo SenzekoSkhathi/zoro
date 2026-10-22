@@ -14,6 +14,7 @@ Run:
 """
 
 import asyncio
+import importlib
 import json
 import os
 import subprocess
@@ -28,14 +29,39 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 import numpy as np
-import sounddevice as sd
 import websockets
 from websockets.exceptions import ConnectionClosed
-from openwakeword.model import Model
 
-import zoro_safety
+try:
+    zoro_safety = importlib.import_module("zoro_safety")
+except ImportError:
+    # Redis-backed proactive wake is optional; microphone wake should still
+    # work when the safety module is unavailable.
+    zoro_safety = None
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _load_sounddevice():
+    """Load the optional microphone backend without a hard static import."""
+    try:
+        return importlib.import_module("sounddevice")
+    except ImportError as exc:
+        raise RuntimeError(
+            "sounddevice is required for microphone wake detection; "
+            "install it with the active Python environment"
+        ) from exc
+
+
+def _load_wakeword_model():
+    """Load openWakeWord without requiring the type checker to resolve it."""
+    try:
+        return importlib.import_module("openwakeword.model").Model
+    except ImportError as exc:
+        raise RuntimeError(
+            "openwakeword is required for wake detection; "
+            "install it with the active Python environment"
+        ) from exc
 
 
 def _app_exe() -> Path | None:
@@ -211,6 +237,8 @@ def _broadcast_wake(loop, name):
 def _redis_proactive_loop(loop):
     """Listen for proactive events emitted via Azure Redis across distributed workers."""
     try:
+        if zoro_safety is None:
+            return
         r = zoro_safety._get_redis()
         if not r:
             return
@@ -226,7 +254,9 @@ def _redis_proactive_loop(loop):
 
 
 def _audio_loop(loop):
-    model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
+    sd = _load_sounddevice()
+    model_class = _load_wakeword_model()
+    model = model_class(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
     last_fire = 0.0
     print(f"[wake] listening for '{WAKE_MODEL}' (threshold {THRESHOLD})")
     with sd.InputStream(
