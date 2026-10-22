@@ -857,6 +857,40 @@ function SystemCard({ data, onClose }: { data: any; onClose: () => void }) {
   );
 }
 
+function BrowserCard({ data, onClose }: { data: any; onClose: () => void }) {
+  const { url, title, screenshot, action } = data || {};
+  return (
+    <HudPanel kind="BROWSER" meta={title || "ZORO BROWSER"} ariaLabel="Dedicated Browser View" onClose={onClose}>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px", background: "rgba(10, 25, 35, 0.7)", padding: "6px 10px", borderRadius: "4px", border: "1px solid rgba(79, 227, 255, 0.2)" }}>
+        <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#4fe3ff", boxShadow: "0 0 8px #4fe3ff" }} />
+        <span style={{ fontFamily: "var(--font-geist-mono), monospace", fontSize: "0.75rem", color: "#a6e9ff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {url || "about:blank"}
+        </span>
+      </div>
+      {screenshot && (
+        <div style={{ position: "relative", borderRadius: "6px", overflow: "hidden", border: "1px solid rgba(79, 227, 255, 0.25)", maxHeight: "400px" }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={`data:image/jpeg;base64,${screenshot}`}
+            alt="Zoro browser viewport"
+            style={{ width: "100%", height: "auto", display: "block" }}
+          />
+        </div>
+      )}
+      {action && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
+          <span style={{ fontSize: "0.75rem", color: "#74aec4", fontStyle: "italic" }}>
+            {action}
+          </span>
+          <span style={{ fontSize: "0.65rem", padding: "2px 6px", background: "rgba(79, 227, 255, 0.15)", borderRadius: "3px", color: "#4fe3ff", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+            Autonomous
+          </span>
+        </div>
+      )}
+    </HudPanel>
+  );
+}
+
 function weatherGlyph(condition: string): string {
   const c = condition.toLowerCase();
   if (c.includes("thunder")) return "⛈";
@@ -1309,6 +1343,10 @@ function renderWidget(w: Widget, onClose: () => void) {
 
   if (w.kind === "system") {
     return <SystemCard key={w.kind} data={w.data} onClose={onClose} />;
+  }
+
+  if (w.kind === "browser") {
+    return <BrowserCard key={w.kind} data={w.data} onClose={onClose} />;
   }
 
   return null;

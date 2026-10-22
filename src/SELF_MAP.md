@@ -8,6 +8,7 @@ list below to know which file to point Claude Code at via the
 
 ## Source modules (src/)
 - `src/zoro_agent.py` — Zoro — voice-first assistant agent.
+- `src/zoro_browser.py` — Zoro's isolated virtual browser engine — powered by Playwright Chromium.
 - `src/zoro_chains.py` — Sequence miner — turn recurring tool-call chains into open lessons.
 - `src/zoro_claude_code.py` — Hand a task off to the Claude Code CLI running in the Zoro repo.
 - `src/zoro_computer.py` — Vision-based computer-use loop — Zoro's fallback "hands".

@@ -44,6 +44,7 @@ from livekit.agents import (
 )
 from livekit.plugins import anthropic, azure, cartesia, deepgram, openai, silero
 
+import zoro_browser
 import zoro_claude_code
 import zoro_computer
 import zoro_corrections
@@ -1072,12 +1073,14 @@ class Zoro(Agent):
             "screen": "vision", "screenshot": "vision",
             "reminders": "notes", "note": "notes",
             "transcript": "chat", "history": "chat",
+            "telemetry": "system", "diagnostics": "system",
+            "web": "browser",
             "everything": "all", "clear": "all", "all widgets": "all",
         }
         t = aliases.get(t, t)
         valid = {
             "search", "calendar", "inbox", "weather", "briefing",
-            "notes", "proactive", "vision", "chat", "all",
+            "notes", "proactive", "vision", "chat", "system", "browser", "all",
         }
         if t not in valid:
             return f"I don't know a widget called {target!r}."
@@ -1367,6 +1370,112 @@ class Zoro(Agent):
             )
         except Exception as e:  # noqa: BLE001 - report aloud
             return f"My computer control failed: {e}"
+
+    # --- Zoro's Dedicated Browser Automation (Playwright) -------------------
+
+    @function_tool()
+    @_logged
+    async def browser_navigate(self, context: RunContext, url: str) -> str:
+        """Navigate Zoro's dedicated background browser to a website or localhost URL.
+
+        Unlike opening the desktop browser, this operates silently in Zoro's
+        isolated virtual browser without stealing focus or moving the user's cursor.
+        Streams the live viewport directly to the web HUD.
+
+        Use for navigating documentation, checking localhost dev servers
+        (e.g. 'localhost:3000'), testing web apps, or deep web research.
+
+        Args:
+            url: The web address or localhost endpoint to open (e.g. 'localhost:3000', 'github.com/trending').
+        """
+        browser = zoro_browser.get_browser()
+        res = await browser.navigate(url)
+        if not res.get("ok"):
+            return res.get("error", "Failed to navigate.")
+        await publish_display("browser", res)
+        return f"Opened {res.get('title')} at {res.get('url')}."
+
+    @function_tool()
+    @_logged
+    async def browser_click(self, context: RunContext, target: str) -> str:
+        """Click a button, link, or element inside Zoro's dedicated browser.
+
+        Args:
+            target: The button text, link text, or CSS selector to click (e.g. 'Sign in', 'Get Started', '#submit-btn').
+        """
+        browser = zoro_browser.get_browser()
+        res = await browser.click(target)
+        if not res.get("ok"):
+            return res.get("error", "Could not click element.")
+        await publish_display("browser", res)
+        return f"Clicked '{target}'. Current page: {res.get('title')}."
+
+    @function_tool()
+    @_logged
+    async def browser_scroll(
+        self, context: RunContext, direction: str = "down", amount: int = 500
+    ) -> str:
+        """Scroll the page inside Zoro's dedicated browser.
+
+        Args:
+            direction: 'down' or 'up'.
+            amount: Scroll distance in pixels (default 500).
+        """
+        browser = zoro_browser.get_browser()
+        res = await browser.scroll(direction, amount)
+        if not res.get("ok"):
+            return res.get("error", "Could not scroll.")
+        await publish_display("browser", res)
+        return f"Scrolled {direction}."
+
+    @function_tool()
+    @_logged
+    async def browser_read(
+        self, context: RunContext, max_chars: int = 3000
+    ) -> str:
+        """Read and extract clean text content from Zoro's active browser page.
+
+        Use to read documentation, inspect web app state, or summarize
+        articles currently loaded in Zoro's browser.
+
+        Args:
+            max_chars: Maximum characters to read (default 3000).
+        """
+        browser = zoro_browser.get_browser()
+        res = await browser.read_content(max_chars)
+        if not res.get("ok"):
+            return res.get("error", "Could not read page content.")
+        content = res.get("content", "").strip()
+        if not content:
+            return "The active page appears to be empty."
+        return f"Page: {res.get('title')}\n\n{content}"
+
+    @function_tool()
+    @_logged
+    async def browser_type(
+        self, context: RunContext, selector: str, text: str
+    ) -> str:
+        """Type text into an input field or search bar in Zoro's dedicated browser.
+
+        Args:
+            selector: Input field CSS selector or placeholder name (e.g. 'input[name=q]', '#search', 'input[type=email]').
+            text: Text to enter into the field.
+        """
+        browser = zoro_browser.get_browser()
+        res = await browser.type_text(selector, text)
+        if not res.get("ok"):
+            return res.get("error", "Could not type into field.")
+        await publish_display("browser", res)
+        return f"Typed text into {selector}."
+
+    @function_tool()
+    @_logged
+    async def browser_close(self, context: RunContext) -> str:
+        """Close Zoro's dedicated browser session and dismiss the browser HUD card."""
+        browser = zoro_browser.get_browser()
+        await browser.close()
+        await publish_display("close", {"target": "browser"})
+        return "Closed browser session."
 
     @function_tool()
     @_logged
