@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from typing import Any
 
 import httpx
 
-from zoro_episodes import _base, _trim, similar_episodes  # type: ignore
+from zoro_episodes import _base, _trim, similar_episodes, _pg_url, _pg_conn  # type: ignore
 
 _REFLECT_MODEL = "claude-haiku-4-5"
 _REFLECT_TIMEOUT = 20
@@ -46,6 +47,41 @@ def _supabase_headers() -> tuple[str, dict] | None:
     return _base()
 
 
+def _call_azure_openai(user_msg: str) -> dict | None:
+    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    key = os.environ.get("AZURE_OPENAI_API_KEY")
+    dep = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-6-sol")
+    if not endpoint or not key:
+        return None
+    try:
+        from openai import AzureOpenAI
+        client = AzureOpenAI(
+            azure_endpoint=endpoint,
+            api_key=key,
+            api_version=os.environ.get("OPENAI_API_VERSION", "2024-10-21"),
+        )
+        resp = client.chat.completions.create(
+            model=dep,
+            messages=[
+                {"role": "system", "content": _REFLECT_SYSTEM},
+                {"role": "user", "content": user_msg},
+            ],
+            response_format={"type": "json_object"},
+            max_completion_tokens=400,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+        if text.startswith("```"):
+            text = text.strip("`")
+            if text.lower().startswith("json"):
+                text = text[4:].lstrip()
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        return None
+    return None
+
+
 def reflect_on_episode(
     *,
     episode_id: int | None,
@@ -58,17 +94,11 @@ def reflect_on_episode(
     """Generate a lesson for one episode and write it to zoro_lessons.
 
     Returns the new lesson id, or None if the write was skipped (no key,
-    LLM failure, Supabase down, etc.). Best-effort: never raises.
+    LLM failure, DB down, etc.). Best-effort: never raises.
     """
     if outcome not in ("error",):
         # Phase 1: only learn from failures. Successful-improvement
         # reflection can come later (it's noisier and lower-value).
-        return None
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return None
-    base = _supabase_headers()
-    if base is None:
         return None
 
     # Build the reflector prompt from the episode + a few similar ones.
@@ -90,20 +120,61 @@ def reflect_on_episode(
         f"Similar past episodes:\n{prior_blocks}\n"
     )
 
-    lesson_obj = _call_claude(api_key, user_msg)
+    lesson_obj = _call_azure_openai(user_msg)
+    if not lesson_obj:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if api_key:
+            lesson_obj = _call_claude(api_key, user_msg)
     if not lesson_obj:
         return None
 
+    failure_summary = _trim(lesson_obj.get("failure_summary"), 400)
+    lesson_text = _trim(lesson_obj.get("lesson"), 400) or "(empty)"
+    suggested_improvement = _trim(lesson_obj.get("suggested_improvement"), 400)
+    needs_resource = _trim(lesson_obj.get("needs_resource"), 200)
+
+    if _pg_url():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO zoro.zoro_lessons
+                        (episode_id, tool, task, outcome, failure_summary, lesson, suggested_improvement, needs_resource, status)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id;
+                        """,
+                        (
+                            episode_id,
+                            tool,
+                            _trim(task, 400),
+                            outcome,
+                            failure_summary,
+                            lesson_text,
+                            suggested_improvement,
+                            needs_resource,
+                            "open",
+                        ),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        return int(row["id"])
+        except Exception:  # noqa: BLE001
+            pass
+
+    base = _supabase_headers()
+    if base is None:
+        return None
     url, headers = base
     payload = {
         "episode_id": episode_id,
         "tool": tool,
         "task": _trim(task, 400),
         "outcome": outcome,
-        "failure_summary": _trim(lesson_obj.get("failure_summary"), 400),
-        "lesson": _trim(lesson_obj.get("lesson"), 400) or "(empty)",
-        "suggested_improvement": _trim(lesson_obj.get("suggested_improvement"), 400),
-        "needs_resource": _trim(lesson_obj.get("needs_resource"), 200),
+        "failure_summary": failure_summary,
+        "lesson": lesson_text,
+        "suggested_improvement": suggested_improvement,
+        "needs_resource": needs_resource,
         "status": "open",
     }
     try:
@@ -164,6 +235,36 @@ def _call_claude(api_key: str, user_msg: str) -> dict | None:
 
 def open_lessons(limit: int = 20) -> list[dict]:
     """Lessons not yet reported or attempted, newest first."""
+    if _pg_url():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT id, created_at, episode_id, tool, task, outcome,
+                               failure_summary, lesson, suggested_improvement,
+                               needs_resource, status, attempted_at,
+                               attempted_branch, attempted_result
+                        FROM zoro.zoro_lessons
+                        WHERE status = 'open'
+                        ORDER BY created_at DESC
+                        LIMIT %s;
+                        """,
+                        (int(limit),),
+                    )
+                    rows = cur.fetchall()
+                    out = []
+                    for r in rows:
+                        d = dict(r)
+                        if isinstance(d.get("created_at"), datetime):
+                            d["created_at"] = d["created_at"].isoformat()
+                        if isinstance(d.get("attempted_at"), datetime):
+                            d["attempted_at"] = d["attempted_at"].isoformat()
+                        out.append(d)
+                    return out
+        except Exception:  # noqa: BLE001
+            pass
+
     base = _supabase_headers()
     if base is None:
         return []
@@ -183,8 +284,34 @@ def open_lessons(limit: int = 20) -> list[dict]:
 
 def mark_status(lesson_id: int, status: str, **fields: Any) -> bool:
     """Update a lesson row's status (and optional attempted_* fields)."""
+    if not lesson_id:
+        return False
+
+    if _pg_url():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    set_clauses = ["status = %s"]
+                    params: list[Any] = [status]
+                    for k in ("attempted_at", "attempted_branch", "attempted_result"):
+                        if k in fields and fields[k] is not None:
+                            set_clauses.append(f"{k} = %s")
+                            params.append(fields[k])
+                    params.append(int(lesson_id))
+                    cur.execute(
+                        f"""
+                        UPDATE zoro.zoro_lessons
+                        SET {', '.join(set_clauses)}
+                        WHERE id = %s;
+                        """,
+                        params,
+                    )
+                    return True
+        except Exception:  # noqa: BLE001
+            pass
+
     base = _supabase_headers()
-    if base is None or not lesson_id:
+    if base is None:
         return False
     url, headers = base
     payload: dict[str, Any] = {"status": status}

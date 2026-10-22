@@ -60,13 +60,38 @@ _SYSTEM_PROMPT = (
 
 
 def _llm_summary(payload: dict) -> str | None:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return None
+    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    key = os.environ.get("AZURE_OPENAI_API_KEY")
+    dep = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-6-sol")
     user_msg = (
         "Stats and lessons from the day are below. Write the report.\n\n"
         + json.dumps(payload, indent=2)
     )
+    if endpoint and key:
+        try:
+            from openai import AzureOpenAI
+            client = AzureOpenAI(
+                azure_endpoint=endpoint,
+                api_key=key,
+                api_version=os.environ.get("OPENAI_API_VERSION", "2024-10-21"),
+            )
+            resp = client.chat.completions.create(
+                model=dep,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                max_completion_tokens=350,
+            )
+            text = (resp.choices[0].message.content or "").strip()
+            if text:
+                return text
+        except Exception:
+            pass
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
     try:
         r = httpx.post(
             "https://api.anthropic.com/v1/messages",
@@ -129,11 +154,29 @@ def _pick_top_lessons(lessons: list[dict], limit: int = 3) -> list[dict]:
 
 
 def _existing_report_for_today() -> dict | None:
+    today = datetime.now().date().isoformat()
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT id, summary, spoken FROM zoro.zoro_daily_reports
+                        WHERE report_date = %s
+                        LIMIT 1;
+                        """,
+                        (today,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        return dict(row)
+        except Exception:
+            pass
+
     base = zoro_episodes._base()  # reuse env wiring
     if base is None:
         return None
     url, headers = base
-    today = datetime.now().date().isoformat()
     try:
         r = httpx.get(
             f"{url}/rest/v1/zoro_daily_reports"
@@ -148,6 +191,39 @@ def _existing_report_for_today() -> dict | None:
 
 
 def _write_report(payload: dict) -> int | None:
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO zoro.zoro_daily_reports
+                        (report_date, summary, top_lesson_ids, needs_resources, episode_stats, spoken)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (report_date) DO UPDATE
+                        SET summary = EXCLUDED.summary,
+                            top_lesson_ids = EXCLUDED.top_lesson_ids,
+                            needs_resources = EXCLUDED.needs_resources,
+                            episode_stats = EXCLUDED.episode_stats,
+                            spoken = EXCLUDED.spoken
+                        RETURNING id;
+                        """,
+                        (
+                            payload.get("report_date"),
+                            payload.get("summary"),
+                            json.dumps(payload.get("top_lesson_ids") or []),
+                            json.dumps(payload.get("needs_resources") or []),
+                            json.dumps(payload.get("episode_stats") or {}),
+                            payload.get("spoken", False),
+                        ),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        val = row["id"] if isinstance(row, dict) else row[0]
+                        return int(val)
+        except Exception:  # noqa: BLE001
+            pass
+
     base = zoro_episodes._base()
     if base is None:
         return None
@@ -339,6 +415,31 @@ async def _run_autonomous_attempt(task: str, lesson_id: int | None) -> dict:
 
 def unspoken_report() -> dict | None:
     """Most recent unspoken report. Morning briefing fetches this."""
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT id, report_date, summary, top_lesson_ids,
+                               needs_resources, episode_stats, spoken, spoken_at
+                        FROM zoro.zoro_daily_reports
+                        WHERE spoken = false
+                        ORDER BY report_date DESC
+                        LIMIT 1;
+                        """
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        d = dict(row)
+                        if isinstance(d.get("report_date"), datetime):
+                            d["report_date"] = d["report_date"].isoformat()
+                        elif hasattr(d.get("report_date"), "isoformat"):
+                            d["report_date"] = d["report_date"].isoformat()
+                        return d
+        except Exception:  # noqa: BLE001
+            pass
+
     base = zoro_episodes._base()
     if base is None:
         return None
@@ -357,8 +458,26 @@ def unspoken_report() -> dict | None:
 
 
 def mark_spoken(report_id: int) -> bool:
+    if not report_id:
+        return False
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE zoro.zoro_daily_reports
+                        SET spoken = true, spoken_at = NOW()
+                        WHERE id = %s;
+                        """,
+                        (int(report_id),),
+                    )
+                    return True
+        except Exception:  # noqa: BLE001
+            pass
+
     base = zoro_episodes._base()
-    if base is None or not report_id:
+    if base is None:
         return False
     url, headers = base
     try:

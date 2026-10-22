@@ -54,6 +54,31 @@ _NOISE_TOOLS = frozenset({
 
 
 def _fetch_recent(days: int) -> list[dict]:
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT session_id, tool, created_at, outcome
+                        FROM zoro.zoro_episodes
+                        WHERE created_at >= NOW() - (%s || ' days')::interval
+                        ORDER BY session_id ASC, created_at ASC
+                        LIMIT 5000;
+                        """,
+                        (str(int(days)),),
+                    )
+                    rows = cur.fetchall()
+                    out = []
+                    for r in rows:
+                        d = dict(r)
+                        if isinstance(d.get("created_at"), datetime):
+                            d["created_at"] = d["created_at"].isoformat()
+                        out.append(d)
+                    return out
+        except Exception:  # noqa: BLE001
+            pass
+
     base = zoro_episodes._base()
     if base is None:
         return []
@@ -121,6 +146,22 @@ def _signature(chain: tuple[str, ...]) -> str:
 def _existing_chain_lessons() -> set[str]:
     """Set of signatures already represented in zoro_lessons (any
     status). Prevents the daily miner from spamming duplicates."""
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT task FROM zoro.zoro_lessons
+                        WHERE tool = 'chain'
+                        LIMIT 2000;
+                        """
+                    )
+                    rows = cur.fetchall()
+                    return {r["task"] for r in rows if r.get("task")}
+        except Exception:  # noqa: BLE001
+            pass
+
     base = zoro_episodes._base()
     if base is None:
         return set()
@@ -142,10 +183,6 @@ def _write_chain_lesson(
     chain: tuple[str, ...], session_count: int, total_count: int,
 ) -> int | None:
     """Insert a lesson row describing a recurring chain."""
-    base = zoro_episodes._base()
-    if base is None:
-        return None
-    url, headers = base
     sig = _signature(chain)
     arrow = " → ".join(chain)
     where = (
@@ -170,6 +207,39 @@ def _write_chain_lesson(
         "needs_resource": None,
         "status": "open",
     }
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO zoro.zoro_lessons
+                        (tool, task, outcome, failure_summary, lesson, suggested_improvement, needs_resource, status)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id;
+                        """,
+                        (
+                            payload["tool"],
+                            payload["task"],
+                            payload["outcome"],
+                            payload["failure_summary"],
+                            payload["lesson"],
+                            payload["suggested_improvement"],
+                            payload["needs_resource"],
+                            payload["status"],
+                        ),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        val = row["id"] if isinstance(row, dict) else row[0]
+                        return int(val)
+        except Exception:  # noqa: BLE001
+            pass
+
+    base = zoro_episodes._base()
+    if base is None:
+        return None
+    url, headers = base
     try:
         r = httpx.post(
             f"{url}/rest/v1/zoro_lessons?select=id",

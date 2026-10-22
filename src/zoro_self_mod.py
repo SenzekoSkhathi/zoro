@@ -56,6 +56,23 @@ def daily_cap() -> int:
 def attempts_in_last_24h() -> int:
     """Count rows written in the last 24h. Returns DEFAULT_DAILY_CAP
     (i.e. blocks autonomous runs) on any DB error — fail closed."""
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT count(*) FROM zoro.zoro_self_mod_log
+                        WHERE created_at >= NOW() - INTERVAL '24 hours';
+                        """
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        val = row["count"] if isinstance(row, dict) else row[0]
+                        return int(val)
+        except Exception:  # noqa: BLE001
+            pass
+
     base = zoro_episodes._base()
     if base is None:
         return daily_cap()
@@ -96,6 +113,35 @@ def log_attempt(
     branch: str | None = None,
     notes: str | None = None,
 ) -> int | None:
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO zoro.zoro_self_mod_log
+                        (lesson_id, role, task, status, files_changed, lines_changed, branch, notes)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id;
+                        """,
+                        (
+                            lesson_id,
+                            role,
+                            task[:500],
+                            status,
+                            files_changed,
+                            lines_changed,
+                            branch,
+                            (notes or "")[:500] or None,
+                        ),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        val = row["id"] if isinstance(row, dict) else row[0]
+                        return int(val)
+        except Exception:  # noqa: BLE001
+            pass
+
     base = zoro_episodes._base()
     if base is None:
         return None
@@ -129,6 +175,32 @@ def log_attempt(
 def recent_attempts(hours: int = 24) -> list[dict]:
     """Self-mod attempts in the last N hours, newest first. Fed into the
     next morning report so the user can see what Zoro tried."""
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT created_at, role, task, status, files_changed,
+                               lines_changed, notes
+                        FROM zoro.zoro_self_mod_log
+                        WHERE created_at >= NOW() - (%s || ' hours')::interval
+                        ORDER BY created_at DESC
+                        LIMIT 20;
+                        """,
+                        (str(int(hours)),),
+                    )
+                    rows = cur.fetchall()
+                    out = []
+                    for r in rows:
+                        d = dict(r)
+                        if isinstance(d.get("created_at"), datetime):
+                            d["created_at"] = d["created_at"].isoformat()
+                        out.append(d)
+                    return out
+        except Exception:  # noqa: BLE001
+            pass
+
     base = zoro_episodes._base()
     if base is None:
         return []

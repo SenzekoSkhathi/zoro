@@ -56,6 +56,16 @@ def _base() -> tuple[str, dict] | None:
     }
 
 
+def _pg_url() -> str | None:
+    return os.environ.get("AZURE_POSTGRES_URL") or os.environ.get("DATABASE_URL")
+
+
+def _pg_conn():
+    import psycopg
+    from psycopg.rows import dict_row
+    return psycopg.connect(_pg_url(), connect_timeout=_TIMEOUT, autocommit=True, row_factory=dict_row)
+
+
 def _trim(s: str | None, n: int) -> str | None:
     if s is None:
         return None
@@ -79,6 +89,37 @@ def log_episode(
     """Insert one episode row and return the new id (or None on failure).
     Best-effort: any failure is swallowed so a flaky network never breaks
     the voice loop. Call from a worker thread."""
+    if _pg_url():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    safe_args = _safe_json(args)
+                    cur.execute(
+                        """
+                        INSERT INTO zoro.zoro_episodes
+                        (kind, tool, task, args, outcome, latency_ms, steps, result_summary, error, session_id)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id;
+                        """,
+                        (
+                            kind,
+                            tool,
+                            _trim(task, 400),
+                            json.dumps(safe_args) if safe_args else None,
+                            outcome,
+                            latency_ms,
+                            steps,
+                            _trim(result_summary, 400),
+                            _trim(error, 400),
+                            session_id,
+                        ),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        return int(row["id"])
+        except Exception:  # noqa: BLE001 - telemetry never raises
+            pass
+
     base = _base()
     if base is None:
         return None
@@ -114,6 +155,24 @@ def log_episode(
 def mark_corrected(episode_id: int, correction_text: str) -> bool:
     """Re-classify a previously logged episode as outcome='corrected' and
     attach the user's correction wording. Best-effort."""
+    if not episode_id:
+        return False
+    if _pg_url():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE zoro.zoro_episodes
+                        SET outcome = 'corrected', correction_text = %s
+                        WHERE id = %s;
+                        """,
+                        (_trim(correction_text, 400), int(episode_id)),
+                    )
+                    return True
+        except Exception:  # noqa: BLE001
+            pass
+
     base = _base()
     if base is None or not episode_id:
         return False
@@ -155,13 +214,41 @@ def similar_episodes(task: str, limit: int = 4) -> list[dict]:
     """Return recent episodes whose task text matches `task` (ILIKE token
     match on the first two non-trivial words). Used to prime the prompt
     with 'last time you tried this' context."""
-    base = _base()
-    if base is None or not task:
+    if not task:
         return []
-    url, headers = base
     tokens = [t for t in re.findall(r"[A-Za-z0-9]+", task.lower()) if len(t) > 3][:2]
     if not tokens:
         return []
+
+    if _pg_url():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    clauses = ["task ILIKE %s" for _ in tokens]
+                    params = [f"%{t}%" for t in tokens] + [int(limit)]
+                    query = f"""
+                        SELECT tool, task, outcome, result_summary, error, created_at
+                        FROM zoro.zoro_episodes
+                        WHERE {' OR '.join(clauses)}
+                        ORDER BY created_at DESC
+                        LIMIT %s;
+                    """
+                    cur.execute(query, params)
+                    rows = cur.fetchall()
+                    out = []
+                    for r in rows:
+                        d = dict(r)
+                        if isinstance(d.get("created_at"), datetime):
+                            d["created_at"] = d["created_at"].isoformat()
+                        out.append(d)
+                    return out
+        except Exception:  # noqa: BLE001
+            pass
+
+    base = _base()
+    if base is None:
+        return []
+    url, headers = base
     # OR over ILIKE on each token, newest first.
     or_clause = ",".join(f"task.ilike.*{t}*" for t in tokens)
     try:
@@ -182,33 +269,51 @@ def similar_episodes(task: str, limit: int = 4) -> list[dict]:
 def tool_stats(days: int = 7) -> list[dict]:
     """Per-tool counts of success vs error in the last `days`. Returned
     sorted by error rate descending (flakiest first)."""
-    base = _base()
-    if base is None:
-        return []
-    url, headers = base
-    # PostgREST can't evaluate `now()` inside a filter value — it requires
-    # a literal timestamp. Compute the cutoff client-side and URL-encode
-    # (the `+00:00` zone offset would otherwise be decoded to a space).
-    cutoff = quote(
-        (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
-    )
-    try:
-        r = httpx.get(
-            f"{url}/rest/v1/zoro_episodes"
-            f"?select=tool,outcome"
-            f"&created_at=gte.{cutoff}"
-            f"&limit=5000",
-            headers=headers,
-            timeout=_TIMEOUT,
-        )
-        r.raise_for_status()
-        rows = r.json()
-    except Exception:  # noqa: BLE001
-        return []
+    rows = []
+    if _pg_url():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT tool, outcome
+                        FROM zoro.zoro_episodes
+                        WHERE created_at >= NOW() - (%s || ' days')::interval
+                        LIMIT 5000;
+                        """,
+                        (str(int(days)),),
+                    )
+                    rows = [dict(r) for r in cur.fetchall()]
+        except Exception:  # noqa: BLE001
+            rows = []
+
+    if not rows:
+        base = _base()
+        if base is not None:
+            url, headers = base
+            cutoff = quote(
+                (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
+            )
+            try:
+                r = httpx.get(
+                    f"{url}/rest/v1/zoro_episodes"
+                    f"?select=tool,outcome"
+                    f"&created_at=gte.{cutoff}"
+                    f"&limit=5000",
+                    headers=headers,
+                    timeout=_TIMEOUT,
+                )
+                r.raise_for_status()
+                rows = r.json()
+            except Exception:  # noqa: BLE001
+                rows = []
+
     agg: dict[str, dict[str, int]] = {}
     for row in rows:
-        a = agg.setdefault(row["tool"], {"success": 0, "error": 0, "aborted": 0, "other": 0})
-        a[row["outcome"] if row["outcome"] in a else "other"] += 1
+        t = row.get("tool") or "unknown"
+        a = agg.setdefault(t, {"success": 0, "error": 0, "aborted": 0, "other": 0})
+        oc = row.get("outcome")
+        a[oc if oc in a else "other"] += 1
     out = []
     for tool, a in agg.items():
         total = sum(a.values())
@@ -226,6 +331,31 @@ def tool_stats(days: int = 7) -> list[dict]:
 
 
 def recent_failures(limit: int = 10) -> list[dict]:
+    if _pg_url():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT created_at, tool, task, outcome, error, result_summary
+                        FROM zoro.zoro_episodes
+                        WHERE outcome IN ('error', 'aborted')
+                        ORDER BY created_at DESC
+                        LIMIT %s;
+                        """,
+                        (int(limit),),
+                    )
+                    rows = cur.fetchall()
+                    out = []
+                    for r in rows:
+                        d = dict(r)
+                        if isinstance(d.get("created_at"), datetime):
+                            d["created_at"] = d["created_at"].isoformat()
+                        out.append(d)
+                    return out
+        except Exception:  # noqa: BLE001
+            pass
+
     base = _base()
     if base is None:
         return []

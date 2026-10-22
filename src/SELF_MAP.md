@@ -16,7 +16,7 @@ list below to know which file to point Claude Code at via the
 - `src/zoro_github.py` — GitHub access via the gh CLI.
 - `src/zoro_google.py` — Read-only Google (Calendar + Gmail) access using the token that
 - `src/zoro_lessons.py` — Reflection layer — turn failed (and notable successful) episodes into lessons.
-- `src/zoro_memory.py` — Zoro's long-term memory — Supabase (PostgREST) access.
+- `src/zoro_memory.py` — Zoro's long-term memory — Azure PostgreSQL (baseform-pg-za) with Supabase fallback.
 - `src/zoro_proactive.py` — Zoro's proactive ambient loop — she speaks first.
 - `src/zoro_prompt.py` — Zoro's identity / operating spec — the shared system prompt for Claude.
 - `src/zoro_reflector.py` — Nightly self-improvement loop.
@@ -28,10 +28,12 @@ list below to know which file to point Claude Code at via the
 - `src/zoro_subagents.py` — Sub-agent loader.
 - `src/zoro_supervisor.py` — Zoro always-on supervisor.
 - `src/zoro_tasks.py` — Durable task queue — 'do this thing later'.
+- `src/zoro_telemetry.py` — Azure Application Insights and OpenTelemetry telemetry for Zoro Assistant.
 - `src/zoro_tools.py` — Pure helper logic for Zoro's tools (no LiveKit imports).
 - `src/zoro_updater.py` — Safe self-update for Zoro's Python backend.
 - `src/zoro_whatsapp.py` — WhatsApp access via the local Node bridge (services/whatsapp).
 - `src/zoro_youtube.py` — YouTube access: search + transcript fetch + Claude-powered summary.
+- `src/wake_service.py` — Zoro on-device wake-word service.
 
 ## Sub-agents (agents/)
 - `agents/agent_smith.md` — Agent Smith: Sub-agent author. Writes new role files under `agents/` when Zoro decides she needs a new specialist.
