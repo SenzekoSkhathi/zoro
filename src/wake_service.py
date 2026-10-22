@@ -17,9 +17,15 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
+
+_SRC = Path(__file__).resolve().parent
+_ROOT = _SRC.parent
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
 import numpy as np
 import sounddevice as sd
@@ -27,7 +33,8 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 from openwakeword.model import Model
 
-_ROOT = Path(__file__).resolve().parent.parent
+import zoro_safety
+
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -204,7 +211,6 @@ def _broadcast_wake(loop, name):
 def _redis_proactive_loop(loop):
     """Listen for proactive events emitted via Azure Redis across distributed workers."""
     try:
-        import zoro_safety
         r = zoro_safety._get_redis()
         if not r:
             return
