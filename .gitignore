@@ -7,6 +7,8 @@ __pycache__/
 # Secrets and runtime state
 .env
 .env*.local
+infra/*_request.json
+infra/deployment_request.json
 data/*
 !data/.gitkeep
 
