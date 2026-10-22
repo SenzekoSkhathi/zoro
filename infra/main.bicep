@@ -10,7 +10,13 @@ param environmentName string = 'baseform-env-za'
 param containerAppName string = 'zoro-agent'
 
 @description('The container image to deploy.')
-param containerImage string = 'ghcr.io/senzekoskhathi/zoro:latest'
+param containerImage string = 'baseformacrza.azurecr.io/zoro-agent:latest'
+
+@description('Azure Container Registry name.')
+param acrRegistryName string = 'baseformacrza'
+
+@description('LiveKit Cloud WebSocket endpoint.')
+param livekitUrl string = 'wss://zoro-9ty4k1h3.livekit.cloud'
 
 // --- Secrets ---
 @secure()
@@ -56,6 +62,10 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: environmentName
 }
 
+resource acr 'Microsoft.ContainerRegistry/registries@2023-01-01-preview' existing = {
+  name: acrRegistryName
+}
+
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: containerAppName
   location: location
@@ -64,6 +74,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
     configuration: {
       activeRevisionsMode: 'Single'
       secrets: [
+        {
+          name: 'acr-password'
+          value: acr.listCredentials().passwords[0].value
+        }
         {
           name: 'azure-openai-key'
           value: azureOpenAiApiKey
@@ -117,6 +131,13 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           value: googleOauthClientSecret
         }
       ]
+      registries: [
+        {
+          server: '${acrRegistryName}.azurecr.io'
+          username: acrRegistryName
+          passwordSecretRef: 'acr-password'
+        }
+      ]
     }
     template: {
       containers: [
@@ -150,7 +171,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             }
             {
               name: 'LIVEKIT_URL'
-              value: 'wss://zoro-pi-tawny.livekit.cloud'
+              value: livekitUrl
             }
             {
               name: 'LIVEKIT_API_KEY'
