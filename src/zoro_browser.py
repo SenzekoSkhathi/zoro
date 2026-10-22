@@ -15,10 +15,21 @@ import asyncio
 import base64
 import os
 import re
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Optional
 
-from playwright.async_api import BrowserContext, Page, Playwright, async_playwright
+# Playwright is optional until the browser is actually used.  Loading it
+# dynamically keeps importing the rest of Zoro usable when the dependency is
+# not installed (and avoids a hard import-time failure).
+try:
+    _playwright_api = import_module("playwright.async_api")
+except ImportError:
+    _playwright_api = None
+
+BrowserContext = Any
+Page = Any
+Playwright = Any
 
 ROOT = Path(__file__).resolve().parent.parent
 USER_DATA_DIR = ROOT / "data" / "browser_profile"
@@ -55,7 +66,12 @@ class ZoroBrowser:
             self._page = None
 
         if not self._playwright:
-            self._playwright = await async_playwright().start()
+            if _playwright_api is None:
+                raise RuntimeError(
+                    "Playwright is required for browser operations. "
+                    "Install it with: pip install playwright"
+                )
+            self._playwright = await _playwright_api.async_playwright().start()
 
         env_headed = os.environ.get("ZORO_BROWSER_HEADED", "0") == "1"
         effective_headless = False if (not headless or env_headed) else True
