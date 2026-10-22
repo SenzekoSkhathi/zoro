@@ -72,7 +72,7 @@ def _services() -> dict[str, tuple[list[str], Path]]:
         # stale code, stealing sessions. `start` is one clean process the
         # supervisor fully owns and can restart deterministically.
         "agent": ([str(PY), "src/zoro_agent.py", "start"], ROOT),
-        "wake": ([str(PY), "src/wake_service.py"], ROOT),
+        **({"wake": ([str(PY), "src/wake_service.py"], ROOT)} if (ROOT / "src" / "wake_service.py").exists() else {}),
         "proactive": ([str(PY), "src/zoro_proactive.py"], ROOT),
         "reflector": ([str(PY), "src/zoro_reflector.py"], ROOT),
         # NOTE: the local Next dev server (localhost:3000) is intentionally

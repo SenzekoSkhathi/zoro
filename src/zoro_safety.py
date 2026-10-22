@@ -23,6 +23,49 @@ from datetime import datetime, time as dtime
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
+_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+if _ENV_PATH.exists():
+    load_dotenv(_ENV_PATH)
+
+try:
+    import redis  # type: ignore
+except ImportError:
+    redis = None  # type: ignore
+
+_redis_client = None
+_redis_last_check = 0.0
+
+
+def _get_redis():
+    """Retrieve shared Redis client for distributed multi-device state sync."""
+    global _redis_client, _redis_last_check
+    now = time.time()
+    if _redis_client is not None:
+        return _redis_client
+    if now - _redis_last_check < 30.0:
+        return None
+    _redis_last_check = now
+    if redis is None:
+        return None
+    url = os.environ.get("REDIS_URL")
+    if not url:
+        return None
+    try:
+        client = redis.Redis.from_url(
+            url,
+            decode_responses=True,
+            socket_connect_timeout=2.0,
+            socket_timeout=2.0,
+        )
+        client.ping()
+        _redis_client = client
+        return _redis_client
+    except Exception:
+        _redis_client = None
+        return None
+
 _DATA = Path(__file__).resolve().parent.parent / "data"
 CONFIG_PATH = _DATA / "zoro_config.json"
 RUNTIME_PATH = _DATA / "zoro_runtime.json"
@@ -245,7 +288,22 @@ def set_stand_down(on: bool, minutes: int | None = None) -> None:
 
     `minutes` optionally auto-resumes after a period; otherwise stand-down
     lasts until explicitly resumed.
+    State is persisted to Azure Redis for multi-device cross-sync and mirrored
+    to the local runtime file.
     """
+    r = _get_redis()
+    if r:
+        try:
+            if not on:
+                r.delete("zoro:safety:stand_down_until")
+            elif minutes:
+                until = int(time.time()) + minutes * 60
+                r.set("zoro:safety:stand_down_until", str(until), ex=minutes * 60 + 3600)
+            else:
+                r.set("zoro:safety:stand_down_until", str(2**31 - 1))
+        except Exception:
+            pass
+
     def _m(rt: dict[str, Any]) -> None:
         if not on:
             rt["stand_down_until"] = 0
@@ -254,12 +312,25 @@ def set_stand_down(on: bool, minutes: int | None = None) -> None:
         else:
             rt["stand_down_until"] = 2**31 - 1  # effectively indefinite
 
-    # User-initiated and important: if it can't be persisted the caller
-    # should hear about it rather than silently stay in the wrong state.
     _update_runtime(_m)
 
 
 def is_stood_down() -> bool:
+    r = _get_redis()
+    if r:
+        try:
+            val = r.get("zoro:safety:stand_down_until")
+            if val is not None:
+                until = int(val)
+                if until and time.time() < until:
+                    return True
+                if until and time.time() >= until and until != 0:
+                    r.delete("zoro:safety:stand_down_until")
+                    return False
+                return False
+        except Exception:
+            pass
+
     def _m(rt: dict[str, Any]) -> bool:
         until = rt.get("stand_down_until", 0)
         if until and time.time() < until:
@@ -294,29 +365,62 @@ def can_interrupt(now: datetime | None = None) -> tuple[bool, str]:
         return False, "stood down"
     if in_quiet_hours(now):
         return False, "quiet hours"
+
+    limit = int(load_config().get("max_interruptions_per_hour", 5))
+    r = _get_redis()
+    if r:
+        try:
+            t_now = time.time()
+            r.zremrangebyscore("zoro:safety:interruptions", "-inf", t_now - 3600)
+            count = r.zcard("zoro:safety:interruptions")
+            if count >= limit:
+                return False, "hourly interruption limit reached"
+            return True, "ok"
+        except Exception:
+            pass
+
     try:
         recent = _update_runtime(_prune_interruptions)
     except (OSError, TimeoutError):
-        # Best-effort housekeeping: if the lock/write is briefly
-        # unavailable, still evaluate the limit on a lock-free read.
         recent = _prune_interruptions(_load_runtime())
-    limit = int(load_config().get("max_interruptions_per_hour", 5))
     if len(recent) >= limit:
         return False, "hourly interruption limit reached"
     return True, "ok"
 
 
 def record_interruption() -> None:
+    r = _get_redis()
+    if r:
+        try:
+            t_now = time.time()
+            r.zremrangebyscore("zoro:safety:interruptions", "-inf", t_now - 3600)
+            r.zadd("zoro:safety:interruptions", {f"{t_now}": t_now})
+            r.expire("zoro:safety:interruptions", 7200)
+        except Exception:
+            pass
+
     def _m(rt: dict[str, Any]) -> None:
         _prune_interruptions(rt)
         rt["interruptions"].append(time.time())
 
-    _update_runtime(_m)
+    try:
+        _update_runtime(_m)
+    except Exception:
+        pass
 
 
 def already_announced(key: str, ttl_seconds: int = 6 * 3600) -> bool:
     """True if `key` was announced within ttl — prevents repeat nags for the
     same calendar event / email / reminder."""
+    r = _get_redis()
+    if r:
+        try:
+            val = r.get(f"zoro:safety:announced:{key}")
+            if val is not None:
+                return (time.time() - float(val)) < ttl_seconds
+        except Exception:
+            pass
+
     rt = _load_runtime()
     announced = rt.get("announced", {})
     ts = announced.get(key)
@@ -324,6 +428,13 @@ def already_announced(key: str, ttl_seconds: int = 6 * 3600) -> bool:
 
 
 def mark_announced(key: str) -> None:
+    r = _get_redis()
+    if r:
+        try:
+            r.set(f"zoro:safety:announced:{key}", str(time.time()), ex=86400)
+        except Exception:
+            pass
+
     def _m(rt: dict[str, Any]) -> None:
         announced = rt.setdefault("announced", {})
         announced[key] = time.time()
@@ -331,4 +442,90 @@ def mark_announced(key: str) -> None:
         cutoff = time.time() - 24 * 3600
         rt["announced"] = {k: v for k, v in announced.items() if v >= cutoff}
 
-    _update_runtime(_m)
+    try:
+        _update_runtime(_m)
+    except Exception:
+        pass
+
+
+# --- multi-device wake & turn arbitration ----------------------------------
+
+
+def claim_turn(
+    device_id: str,
+    volume_rms: float = -20.0,
+    is_active: bool = False,
+    window_ms: int = 150,
+) -> tuple[bool, str]:
+    """Arbitrate between nearby devices when the wake word is detected.
+
+    When both laptop and phone hear "Hey Zoro", both call claim_turn().
+    They register a candidate bid with their audio volume and activity status.
+    The device with the highest score (higher RMS loudness, active screen priority)
+    wins the turn. Other devices yield silently.
+    Returns (won_turn: bool, reason: str).
+    """
+    r = _get_redis()
+    if not r:
+        # Standalone local fallback: if Redis is unavailable, single device always wins
+        return True, "redis_offline_standalone"
+
+    try:
+        # 1. Check if a turn is already currently active and held by someone else
+        active = r.get("zoro:turn:active")
+        if active and active != device_id:
+            return False, f"yielded: active turn held by {active}"
+
+        # 2. Calculate priority score:
+        # volume_rms is typically negative dB (-40 dB quiet, -10 dB loud).
+        # Being in active use (e.g. laptop unlocked / typing) adds a +15 dB bonus.
+        score = float(volume_rms) + (15.0 if is_active else 0.0)
+
+        # 3. Register bid into candidates sorted set with 2s expiry
+        r.zadd("zoro:turn:candidates", {device_id: score})
+        r.expire("zoro:turn:candidates", 2)
+
+        # 4. Wait out the arbitration window (e.g. 150ms) to allow nearby device's bid to arrive
+        time.sleep(window_ms / 1000.0)
+
+        # 5. Determine the winner (highest score)
+        candidates = r.zrevrange("zoro:turn:candidates", 0, 0)
+        if not candidates:
+            winner = device_id
+        else:
+            winner = candidates[0]
+
+        if winner == device_id:
+            # We won! Lock active turn for 10 seconds (refreshed by speech)
+            r.set("zoro:turn:active", device_id, ex=10)
+            # Clear candidates
+            r.delete("zoro:turn:candidates")
+            return True, "elected"
+        else:
+            return False, f"yielded: {winner} has higher priority / volume"
+    except Exception as e:
+        # On any redis glitch, default to true so voice is never blocked
+        return True, f"fallback_on_error: {e}"
+
+
+def release_turn(device_id: str) -> None:
+    """Release the active turn once Zoro finishes speaking or user finishes utterance."""
+    r = _get_redis()
+    if r:
+        try:
+            current = r.get("zoro:turn:active")
+            if current == device_id:
+                r.delete("zoro:turn:active")
+        except Exception:
+            pass
+
+
+def get_active_turn() -> str | None:
+    """Check which device currently holds the active turn."""
+    r = _get_redis()
+    if r:
+        try:
+            return r.get("zoro:turn:active")
+        except Exception:
+            pass
+    return None

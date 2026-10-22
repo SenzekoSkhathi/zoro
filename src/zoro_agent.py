@@ -41,7 +41,7 @@ from livekit.agents import (
     function_tool,
     get_job_context,
 )
-from livekit.plugins import anthropic, cartesia, deepgram, silero
+from livekit.plugins import anthropic, cartesia, deepgram, openai, silero
 
 import zoro_claude_code
 import zoro_computer
@@ -60,7 +60,10 @@ import zoro_tasks
 import zoro_tools
 import zoro_whatsapp
 import zoro_youtube
+import zoro_telemetry
 from zoro_prompt import ZORO_SYSTEM_PROMPT
+
+zoro_telemetry.init_telemetry()
 
 # Session id for episode rows — lets us collate a single conversation later.
 _SESSION_ID = uuid.uuid4().hex[:12]
@@ -432,6 +435,9 @@ async def _watch_spotify() -> None:
             return
         except Exception as e:  # noqa: BLE001 - transient API/network blip
             errors += 1
+            if "403" in str(e) or errors >= 3:
+                print(f"[zoro] spotify watch paused: {e}", flush=True)
+                return
             print(f"[zoro] spotify watch error ({errors}): {e}", flush=True)
             await asyncio.sleep(min(_SPOTIFY_POLL_IDLE * errors, 60.0))
             continue
@@ -1755,7 +1761,7 @@ class Zoro(Agent):
         """Hand a coding/editing task off to Claude Code in the Zoro repo.
 
         Fire-and-forget: the spawned `claude` CLI session runs in
-        `c:/Users/senze/Downloads/zoro` on a fresh branch off main, with
+        `C:/Users/senze/zoro` on a fresh branch off main, with
         permissions bypassed. After it finishes, a boot check runs and
         the branch is auto-merged to main if it passes, or rolled back
         if it fails. Touching protected files (zoro_safety,
@@ -2838,30 +2844,37 @@ def morning_directive() -> tuple[str, str | None]:
 async def entrypoint(ctx: JobContext) -> None:
     # Pass keys explicitly — plugin env-var names differ from our .env
     # names, and STT and TTS both ride on the single DEEPGRAM_API_KEY.
+    azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    azure_key = os.environ.get("AZURE_OPENAI_API_KEY")
+    azure_deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-6-sol")
+
+    if azure_endpoint and azure_key:
+        active_llm = openai.LLM.with_azure(
+            model=azure_deployment,
+            azure_endpoint=azure_endpoint,
+            azure_deployment=azure_deployment,
+            api_key=azure_key,
+            api_version=os.environ.get("OPENAI_API_VERSION", "2024-10-21"),
+            max_completion_tokens=2048,
+            reasoning_effort="none",
+        )
+        llm_label = f"azure-openai({azure_deployment})"
+    else:
+        active_llm = anthropic.LLM(
+            model="claude-sonnet-4-5",
+            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            caching="ephemeral",
+            _strict_tool_schema=False,
+            max_tokens=2048,
+            timeout=httpx.Timeout(15.0, read=60.0, write=15.0, pool=15.0),
+        )
+        llm_label = "anthropic(sonnet-4-5)"
+
     session = AgentSession(
         stt=deepgram.STT(
             model="nova-3", language="en", api_key=os.environ["DEEPGRAM_API_KEY"]
         ),
-        llm=anthropic.LLM(
-            model="claude-sonnet-4-5",
-            api_key=os.environ["ANTHROPIC_API_KEY"],
-            # Cache the (large) system prompt + tool schemas + history so
-            # every turn after the first is small and fast — fixes the
-            # first-token timeouts caused by the heavy MCP tool surface.
-            caching="ephemeral",
-            # Zoro has >20 tools; Anthropic caps *strict* tools at 20, so
-            # disable strict tool schemas (tool calling still works fine —
-            # this is the pre-strict default behaviour). Without this every
-            # LLM call 400s with "Too many strict tools" and she goes mute.
-            _strict_tool_schema=False,
-            # Voice replies are short, but max_tokens is a ceiling, not a
-            # target — normal turns still stop early, so a higher cap costs
-            # nothing for them while letting the full morning briefing run
-            # to completion instead of being truncated mid-sentence.
-            max_tokens=2048,
-            # Generous HTTP timeout for slower networks/large first request.
-            timeout=httpx.Timeout(15.0, read=60.0, write=15.0, pool=15.0),
-        ),
+        llm=active_llm,
         # Local Kokoro-FastAPI (OpenAI-compatible) — runs at localhost:8880,
         # zero API cost. Voice bf_alice = British female. If the local server
         # is down, falls back to Deepgram Aura.
@@ -2903,8 +2916,8 @@ async def entrypoint(ctx: JobContext) -> None:
         },
     )
 
-    print("[zoro] session config: TTS=cartesia(sonic-2/Gemma) "
-          "STT=deepgram(nova-3) LLM=anthropic(sonnet-4-5) MCP=off",
+    print(f"[zoro] session config: TTS=cartesia(sonic-2/Gemma) "
+          f"STT=deepgram(nova-3) LLM={llm_label} MCP=off",
           flush=True)
     instructions = await asyncio.to_thread(build_instructions)
 
@@ -2955,6 +2968,7 @@ async def entrypoint(ctx: JobContext) -> None:
             session_id=_SESSION_ID,
         ))
 
+    zoro_telemetry.track_event('zoro_session_start', {'room': ctx.room.name, 'llm': llm_label, 'session_id': _SESSION_ID})
     await session.start(agent=Zoro(instructions), room=ctx.room)
 
     # Follow Spotify in the background so the now-playing card stays live

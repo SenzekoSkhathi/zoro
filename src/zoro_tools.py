@@ -631,9 +631,52 @@ def capture_screen_b64(max_edge: int = 1568) -> tuple[str, str]:
 def _vision_answer(
     b64: str, media_type: str, question: str, api_key: str
 ) -> str:
+    import os
+
+    azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    azure_key = os.environ.get("AZURE_OPENAI_API_KEY")
+    azure_dep = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-6-sol")
+
+    if azure_endpoint and azure_key:
+        try:
+            from openai import AzureOpenAI
+            client = AzureOpenAI(
+                azure_endpoint=azure_endpoint,
+                api_key=azure_key,
+                api_version=os.environ.get("OPENAI_API_VERSION", "2024-10-21"),
+            )
+            data_uri = f"data:{media_type};base64,{b64}"
+            resp = client.chat.completions.create(
+                model=azure_dep,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": data_uri},
+                            },
+                            {
+                                "type": "text",
+                                "text": (
+                                    "You are looking at the user's computer screen. "
+                                    "Answer concisely for the ear (it will be spoken "
+                                    "aloud): " + question
+                                ),
+                            },
+                        ],
+                    }
+                ],
+                max_completion_tokens=400,
+            )
+            ans = resp.choices[0].message.content
+            return (ans or "").strip() or "I couldn't make sense of the screen."
+        except Exception:
+            pass
+
     import anthropic
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY", ""))
     msg = client.messages.create(
         model="claude-sonnet-4-5",
         max_tokens=400,

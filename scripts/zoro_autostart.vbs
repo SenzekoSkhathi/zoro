@@ -5,7 +5,7 @@
 ' Zoro starting automatically.
 
 Dim root, pythonw, script, sh
-root    = "C:\Users\senze\Downloads\zoro"
+root    = "C:\Users\senze\zoro"
 pythonw = root & "\.venv\Scripts\pythonw.exe"
 script  = root & "\src\zoro_supervisor.py"
 

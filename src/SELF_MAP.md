@@ -1,7 +1,7 @@
 # Zoro self-map
 
 This is your own source code. You are a Python voice assistant
-whose code lives at `c:/Users/senze/Downloads/zoro`. When the user
+whose code lives at `C:/Users/senze/zoro`. When the user
 asks you to change, improve, or extend yourself, use the module
 list below to know which file to point Claude Code at via the
 `ask_claude_code` tool.
@@ -32,7 +32,6 @@ list below to know which file to point Claude Code at via the
 - `src/zoro_updater.py` — Safe self-update for Zoro's Python backend.
 - `src/zoro_whatsapp.py` — WhatsApp access via the local Node bridge (services/whatsapp).
 - `src/zoro_youtube.py` — YouTube access: search + transcript fetch + Claude-powered summary.
-- `src/wake_service.py` — Zoro on-device wake-word service.
 
 ## Sub-agents (agents/)
 - `agents/agent_smith.md` — Agent Smith: Sub-agent author. Writes new role files under `agents/` when Zoro decides she needs a new specialist.
@@ -44,6 +43,7 @@ list below to know which file to point Claude Code at via the
 - `scripts/build_self_map.py`
 - `scripts/install_autostart.ps1`
 - `scripts/make_icon.py`
+- `scripts/show_wa_qr.py`
 - `scripts/uninstall_autostart.ps1`
 - `scripts/zoro_autostart.vbs`
 - `scripts/zoro_daily_reports.sql`

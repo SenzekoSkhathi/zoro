@@ -84,7 +84,7 @@ def build() -> str:
         "# Zoro self-map",
         "",
         "This is your own source code. You are a Python voice assistant",
-        "whose code lives at `c:/Users/senze/Downloads/zoro`. When the user",
+        "whose code lives at `C:/Users/senze/zoro`. When the user",
         "asks you to change, improve, or extend yourself, use the module",
         "list below to know which file to point Claude Code at via the",
         "`ask_claude_code` tool.",

@@ -294,15 +294,29 @@ export default function Home() {
       <HudFrame phase={phase} online={serviceOnline} />
       <InstrumentRail data={telemetry} />
 
-      {phase !== "active" && <Orb mode={faceMode} />}
+      {phase !== "active" && (
+        <div
+          onClick={() => {
+            void primeAudio();
+            if (phase === "idle") setPhase("connecting");
+          }}
+          style={{ cursor: "pointer" }}
+          title="Click to talk with Zoro"
+        >
+          <Orb mode={faceMode} />
+        </div>
+      )}
 
-      {/* Browser-only: one light tap to satisfy autoplay so wake-triggered
-          sessions have working audio. Suppressed in the Tauri shell (primed
-          automatically) and once the user has enabled it. */}
-      {!audioPrimed && phase !== "active" && (
+      {phase !== "active" && (
         <div className={styles.activateDock}>
-          <button className={styles.button} onClick={primeAudio}>
-            Enable audio
+          <button
+            className={styles.button}
+            onClick={() => {
+              void primeAudio();
+              if (phase === "idle") setPhase("connecting");
+            }}
+          >
+            {phase === "connecting" ? "Connecting..." : "Tap to Speak"}
           </button>
         </div>
       )}
@@ -337,7 +351,7 @@ export default function Home() {
 
       {phase !== "active" && !serviceOnline && (
         <p className={styles.heard}>
-          wake service offline — run wake_service.py
+          wake service offline — click orb or tap to speak
         </p>
       )}
     </main>

@@ -1,6 +1,18 @@
 # Zoro backend — LiveKit Agents voice pipeline
-# Brain: Claude | STT: Deepgram | TTS: Deepgram Aura | Transport: LiveKit
+# Brain: Azure OpenAI GPT-6 | STT: Deepgram | TTS: Cartesia / Deepgram | Transport: LiveKit
 livekit-agents[deepgram,anthropic,silero]>=1.0
+livekit-plugins-openai>=1.0
+livekit-plugins-cartesia>=1.0
+
+# Azure Core Services & Data Layer
+psycopg[binary]>=3.2
+redis>=5.0
+azure-monitor-opentelemetry>=1.8.0
+azure-identity>=1.17.0
+opentelemetry-api==1.39.1
+opentelemetry-sdk==1.39.1
+opentelemetry-semantic-conventions==0.60b1
+
 # Transitive via livekit-agents (its tokenize module hard-imports it), but
 # pip has shipped a broken stub wheel here before — missing the compiled
 # lk_blingfire cext, which crash-loops the agent at import. Pin it so a
