@@ -1,4 +1,4 @@
-"""Zoro's identity / operating spec — the shared system prompt for Claude.
+"""Zoro's identity / operating spec — the shared system prompt.
 
 Kept separate from the agent wiring so it can be iterated on its own and
 reused unchanged by every Zoro client (desktop now, phone later).
@@ -20,8 +20,8 @@ def _load_self_map() -> str:
         "The block below is auto-generated from your repository. It tells\n"
         "you which file in `src/` implements each part of you. When the\n"
         "user asks you to change, improve, fix, or extend yourself, name\n"
-        "the relevant file(s) in your task to `ask_claude_code` so the\n"
-        "Claude Code session goes straight to the right module.\n\n"
+        "the relevant file(s) in your task to `delegate_task` so your\n"
+        "Azure Autonomous Engineer goes straight to the right module.\n\n"
         + body
     )
 

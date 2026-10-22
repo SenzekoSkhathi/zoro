@@ -7,8 +7,7 @@ __pycache__/
 # Secrets and runtime state
 .env
 .env*.local
-infra/*_request.json
-infra/deployment_request.json
+infra/*.json
 data/*
 !data/.gitkeep
 
@@ -16,6 +15,7 @@ data/*
 *.log
 
 # Build artifacts
+desktop/src-tauri/target/
 web/.next/
 web/tsconfig.tsbuildinfo
 **/node_modules/

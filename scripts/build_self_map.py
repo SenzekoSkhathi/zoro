@@ -86,8 +86,8 @@ def build() -> str:
         "This is your own source code. You are a Python voice assistant",
         "whose code lives at `C:/Users/senze/zoro`. When the user",
         "asks you to change, improve, or extend yourself, use the module",
-        "list below to know which file to point Claude Code at via the",
-        "`ask_claude_code` tool.",
+        "list below to know which file to point your Azure Autonomous Engineer at via the",
+        "`delegate_task` / `ask_claude_code` tool.",
         "",
     ]
     parts = (

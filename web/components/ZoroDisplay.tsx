@@ -788,10 +788,10 @@ function ClaudeCard({
   return (
     <HudPanel
       key="claude"
-      kind="CLAUDE"
+      kind="ENGINEER"
       meta={badge}
       accent={data.status === "failed" ? "gold" : undefined}
-      ariaLabel="Claude Code session"
+      ariaLabel="Azure Autonomous Engineer session"
       onClose={onClose}
     >
       <p className={styles.ccTask}>{data.task}</p>
@@ -807,7 +807,7 @@ function ClaudeCard({
           </div>
         ))}
         {data.status === "running" && data.lines.length === 0 && (
-          <div className={styles.ccLogLine}>Starting Claude…</div>
+          <div className={styles.ccLogLine}>Starting Azure Engineer…</div>
         )}
       </div>
       {data.result && (

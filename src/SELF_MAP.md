@@ -3,8 +3,8 @@
 This is your own source code. You are a Python voice assistant
 whose code lives at `C:/Users/senze/zoro`. When the user
 asks you to change, improve, or extend yourself, use the module
-list below to know which file to point Claude Code at via the
-`ask_claude_code` tool.
+list below to know which file to point your Azure Autonomous Engineer at via the
+`delegate_task` / `ask_claude_code` tool.
 
 ## Source modules (src/)
 - `src/zoro_agent.py` — Zoro — voice-first assistant agent.
@@ -19,7 +19,7 @@ list below to know which file to point Claude Code at via the
 - `src/zoro_lessons.py` — Reflection layer — turn failed (and notable successful) episodes into lessons.
 - `src/zoro_memory.py` — Zoro's long-term memory — Azure PostgreSQL (baseform-pg-za) with Supabase fallback.
 - `src/zoro_proactive.py` — Zoro's proactive ambient loop — she speaks first.
-- `src/zoro_prompt.py` — Zoro's identity / operating spec — the shared system prompt for Claude.
+- `src/zoro_prompt.py` — Zoro's identity / operating spec — the shared system prompt.
 - `src/zoro_reflector.py` — Nightly self-improvement loop.
 - `src/zoro_retry.py` — Bounded retry for transient network failures on idempotent tool reads.
 - `src/zoro_safety.py` — Shared safety / gating layer for Zoro's autonomous behaviour.
@@ -44,10 +44,15 @@ list below to know which file to point Claude Code at via the
 
 ## Scripts (scripts/)
 - `scripts/build_self_map.py`
+- `scripts/deploy_azure.ps1`
+- `scripts/deploy_to_azure.py`
+- `scripts/deploy_web.ps1`
+- `scripts/google_auth.py`
 - `scripts/install_autostart.ps1`
 - `scripts/make_icon.py`
 - `scripts/show_wa_qr.py`
 - `scripts/uninstall_autostart.ps1`
+- `scripts/validate_template.py`
 - `scripts/zoro_autostart.vbs`
 - `scripts/zoro_daily_reports.sql`
 - `scripts/zoro_episodes.sql`

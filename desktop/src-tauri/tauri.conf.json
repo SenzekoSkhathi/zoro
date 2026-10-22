@@ -11,7 +11,7 @@
       {
         "label": "main",
         "title": "Zoro",
-        "url": "https://zoro-pi-tawny.vercel.app?overlay=true",
+        "url": "https://zoro-web.greentree-c12de99e.southafricanorth.azurecontainerapps.io?overlay=true",
         "width": 500,
         "height": 860,
         "resizable": true,

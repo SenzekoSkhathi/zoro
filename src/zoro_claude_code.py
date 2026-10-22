@@ -198,6 +198,26 @@ def _execute_local_tool(work_dir: Path, name: str, args: dict) -> str:
         directory = args.get("directory", "src")
         return _search_in_files(work_dir, query, directory)
 
+    elif name == "run_command":
+        cmd = args.get("command", "")
+        # Safety filter
+        if any(bad in cmd.lower() for bad in ["rmdir /s", "del /f", "rm -rf", "drop table"]):
+            return "Error: destructive command blocked by safety policy."
+        try:
+            import subprocess
+            proc = subprocess.run(
+                cmd,
+                shell=True,
+                cwd=str(work_dir),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            out = (proc.stdout or "") + (proc.stderr or "")
+            return out.strip()[:6000] or "(Command exited with code 0 and no output)"
+        except Exception as e:
+            return f"Error executing command: {e}"
+
     return f"Error: unknown tool {name}"
 
 
@@ -288,6 +308,18 @@ async def _run_azure_coder_streaming(
                         "directory": {"type": "string", "default": "src"},
                     },
                     "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "run_command",
+                "description": "Execute a shell command inside the repository (e.g. git status, python test)",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
                 },
             },
         },
@@ -459,8 +491,8 @@ async def run_streaming(
                 "kind": "narration",
                 "text": f"(unknown sub-agent role '{role}', running ungated)",
             }
-    has_claude = bool(shutil.which("claude"))
-    use_azure = not has_claude or os.environ.get("ZORO_CODER_ENGINE") == "azure"
+    # Claude CLI is completely disconnected. Always use Zoro's Azure OpenAI Autonomous Engineer.
+    use_azure = True
 
     if use_azure:
         async for ev in _run_azure_coder_streaming(

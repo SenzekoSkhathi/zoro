@@ -161,13 +161,11 @@ def transcript(query_or_url: str) -> dict:
 
 
 def summarise(text: str) -> str:
-    """Hand `text` to Claude (Haiku) and ask for a one-paragraph summary.
+    """Summarise a YouTube video transcript using Azure OpenAI.
 
     Truncates very long transcripts so we don't pay for tokens we don't
     need. Returns the summary string.
     """
-    import anthropic
-
     snippet = text[:MAX_SUMMARY_CHARS]
     truncated = len(text) > MAX_SUMMARY_CHARS
     sys_prompt = (
@@ -180,14 +178,30 @@ def summarise(text: str) -> str:
     user = snippet + (
         "\n\n[Transcript truncated for length.]" if truncated else ""
     )
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    resp = client.messages.create(
-        model=SUMMARY_MODEL,
-        max_tokens=600,
-        system=sys_prompt,
-        messages=[{"role": "user", "content": user}],
-    )
-    parts = [
-        b.text for b in resp.content if getattr(b, "type", "") == "text"
-    ]
-    return "\n".join(parts).strip()
+
+    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    key = os.environ.get("AZURE_OPENAI_API_KEY")
+    dep = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-6-sol")
+
+    if endpoint and key:
+        try:
+            from openai import AzureOpenAI
+            client = AzureOpenAI(
+                azure_endpoint=endpoint,
+                api_key=key,
+                api_version=os.environ.get("OPENAI_API_VERSION", "2024-10-21"),
+            )
+            resp = client.chat.completions.create(
+                model=dep,
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user},
+                ],
+                max_completion_tokens=600,
+            )
+            ans = resp.choices[0].message.content
+            return (ans or "").strip()
+        except Exception as e:
+            return f"Summary failed: {e}"
+
+    return "Azure OpenAI credentials not configured."

@@ -245,7 +245,7 @@ async def publish_notes_panel() -> None:
 
 
 def _summarise_claude_result(state: dict) -> str:
-    """One spoken sentence summarising how a Claude session ended.
+    """One spoken sentence summarising how an autonomous engineering session ended.
 
     Trims long results so Zoro doesn't read paragraphs aloud — the full
     text stays on the card for the user to read.
@@ -254,21 +254,21 @@ def _summarise_claude_result(state: dict) -> str:
     merge = state.get("merge") or ""
     if state.get("status") == "failed":
         snippet = raw[:140] + ("…" if len(raw) > 140 else "")
-        return f"Claude couldn't finish: {snippet}" if snippet else (
-            "Claude hit an error."
+        return f"The engineering task couldn't finish: {snippet}" if snippet else (
+            "The engineering task hit an error."
         )
     if merge == "rolled-back":
         return (
-            "Claude's change broke my boot check, so I rolled it back. "
+            "The autonomous change broke my boot check, so I rolled it back. "
             "Nothing was merged, Sir."
         )
     if merge == "no-changes":
-        return "Claude ran but didn't change anything."
+        return "The autonomous engineering core ran but didn't change anything."
     snippet = raw[:200] + ("…" if len(raw) > 200 else "")
     suffix = " Merged into main." if merge == "merged" else ""
     if snippet:
-        return f"Claude finished. {snippet}{suffix}"
-    return "Claude is done." + suffix
+        return f"Task complete Sir. {snippet}{suffix}"
+    return "Task is complete Sir." + suffix
 
 
 async def _speak_or_queue(session, text: str) -> None:
@@ -560,7 +560,10 @@ TOOL_FILLERS: dict[str, list[str]] = {
         "Reading through that document now, Sir...",
     ],
     "ask_claude_code": [
-        "Handing that task to Claude Code now, Sir...",
+        "Delegating that task to my Azure core now, Sir...",
+    ],
+    "delegate_task": [
+        "Delegating that task to my Azure core now, Sir...",
     ],
     "where_am_i": [
         "Checking your location...",
@@ -2076,38 +2079,38 @@ class Zoro(Agent):
     async def ask_claude_code(
         self, context: RunContext, task: str, role: str = ""
     ) -> str:
-        """Hand a coding/editing task off to Claude Code in the Zoro repo.
+        """Hand an engineering, coding, or editing task off to Zoro's Azure OpenAI Autonomous Engineer.
 
-        Fire-and-forget: the spawned `claude` CLI session runs in
-        `C:/Users/senze/zoro` on a fresh branch off main, with
-        permissions bypassed. After it finishes, a boot check runs and
-        the branch is auto-merged to main if it passes, or rolled back
-        if it fails. Touching protected files (zoro_safety,
-        zoro_claude_code, zoro_prompt) is always rolled back. Progress
-        streams to a web card.
+        Fire-and-forget: runs in the repository on a fresh branch off main.
+        After it finishes, a boot check runs and the branch is auto-merged
+        to main if it passes, or rolled back if it fails. Touching protected
+        files is always rolled back. Progress streams to the web card.
 
         Use for things Zoro herself can't do: writing/refactoring code,
-        adding features, fixing bugs in the repo. NOT for trivial file
-        edits she could do via her own file tools — this spins up a
-        whole Claude session.
+        adding features, fixing bugs in the repo.
 
         Args:
             task: Plain-language task, e.g. "add a dark-mode toggle to
                 the web app" or "fix the import error in zoro_proactive".
             role: Optional sub-agent role name (e.g. "researcher",
-                "coder", "agent_smith"). When set, the matching
-                `agents/<role>.md` system prompt and tool whitelist are
-                applied. Call list_sub_agents to discover available
-                roles. Leave empty for a general-purpose run.
+                "coder", "agent_smith").
         """
         asyncio.create_task(_run_claude_task(
             task, context.session, role=(role.strip() or None),
         ))
         suffix = f" using the {role.strip()} role" if role.strip() else ""
         return (
-            f"I'll have Claude work on that{suffix} — watch the screen "
-            "for progress. I'll let you know when it's done."
+            f"I'm on it Sir — delegating to my Azure engineering core now{suffix}. "
+            "Watch the screen for progress."
         )
+
+    @function_tool()
+    @_logged
+    async def delegate_task(
+        self, context: RunContext, task: str, role: str = ""
+    ) -> str:
+        """Hand an engineering, coding, or editing task off to Zoro's Azure OpenAI Autonomous Engineer."""
+        return await self.ask_claude_code(context, task, role)
 
     @function_tool()
     @_logged
