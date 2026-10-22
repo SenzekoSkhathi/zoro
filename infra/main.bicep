@@ -254,3 +254,4 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
 
 output fqdn string = environment.properties.defaultDomain
 output containerAppId string = containerApp.id
+
