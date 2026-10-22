@@ -12,4 +12,9 @@ models
 *.tmp
 *.log
 .env
+data/*.log
+data/_tts_probe*
+data/whatsapp-session
+data/browser_profile
+
 

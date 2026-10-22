@@ -1,0 +1,262 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "southafricanorth"
+    },
+    "environmentName": {
+      "type": "string",
+      "defaultValue": "baseform-env-za"
+    },
+    "containerAppName": {
+      "type": "string",
+      "defaultValue": "zoro-agent"
+    },
+    "containerImage": {
+      "type": "string",
+      "defaultValue": "ghcr.io/senzekoskhathi/zoro:latest"
+    },
+    "registryServer": {
+      "type": "string",
+      "defaultValue": "ghcr.io"
+    },
+    "registryUsername": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "registryPassword": {
+      "type": "securestring",
+      "defaultValue": ""
+    },
+    "azureOpenAiApiKey": {
+      "type": "securestring"
+    },
+    "livekitApiKey": {
+      "type": "securestring"
+    },
+    "livekitApiSecret": {
+      "type": "securestring"
+    },
+    "deepgramApiKey": {
+      "type": "securestring"
+    },
+    "cartesiaApiKey": {
+      "type": "securestring"
+    },
+    "anthropicApiKey": {
+      "type": "securestring"
+    },
+    "tavilyApiKey": {
+      "type": "securestring"
+    },
+    "azurePostgresUrl": {
+      "type": "securestring"
+    },
+    "redisUrl": {
+      "type": "securestring"
+    },
+    "applicationinsightsConnectionString": {
+      "type": "securestring"
+    },
+    "spotifyClientSecret": {
+      "type": "securestring"
+    },
+    "youtubeApiKey": {
+      "type": "securestring"
+    },
+    "googleOauthClientSecret": {
+      "type": "securestring"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[parameters('containerAppName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('environmentName'))]",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "secrets": [
+            {
+              "name": "reg-password",
+              "value": "[parameters('registryPassword')]"
+            },
+            {
+              "name": "azure-openai-key",
+              "value": "[parameters('azureOpenAiApiKey')]"
+            },
+            {
+              "name": "livekit-api-key",
+              "value": "[parameters('livekitApiKey')]"
+            },
+            {
+              "name": "livekit-api-secret",
+              "value": "[parameters('livekitApiSecret')]"
+            },
+            {
+              "name": "deepgram-api-key",
+              "value": "[parameters('deepgramApiKey')]"
+            },
+            {
+              "name": "cartesia-api-key",
+              "value": "[parameters('cartesiaApiKey')]"
+            },
+            {
+              "name": "anthropic-api-key",
+              "value": "[parameters('anthropicApiKey')]"
+            },
+            {
+              "name": "tavily-api-key",
+              "value": "[parameters('tavilyApiKey')]"
+            },
+            {
+              "name": "database-url",
+              "value": "[parameters('azurePostgresUrl')]"
+            },
+            {
+              "name": "redis-url",
+              "value": "[parameters('redisUrl')]"
+            },
+            {
+              "name": "appinsights-conn",
+              "value": "[parameters('applicationinsightsConnectionString')]"
+            },
+            {
+              "name": "spotify-secret",
+              "value": "[parameters('spotifyClientSecret')]"
+            },
+            {
+              "name": "youtube-api-key",
+              "value": "[parameters('youtubeApiKey')]"
+            },
+            {
+              "name": "google-oauth-secret",
+              "value": "[parameters('googleOauthClientSecret')]"
+            }
+          ],
+          "registries": "[if(empty(parameters('registryUsername')), createArray(), createArray(createObject('server', parameters('registryServer'), 'username', parameters('registryUsername'), 'passwordSecretRef', 'reg-password')))]"
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "zoro-agent",
+              "image": "[parameters('containerImage')]",
+              "resources": {
+                "cpu": 0.5,
+                "memory": "1.0Gi"
+              },
+              "env": [
+                {
+                  "name": "PYTHONUNBUFFERED",
+                  "value": "1"
+                },
+                {
+                  "name": "AZURE_OPENAI_ENDPOINT",
+                  "value": "https://sa-higher-ed-research-resource.cognitiveservices.azure.com/"
+                },
+                {
+                  "name": "AZURE_OPENAI_DEPLOYMENT",
+                  "value": "gpt-6-sol"
+                },
+                {
+                  "name": "OPENAI_API_VERSION",
+                  "value": "2024-10-21"
+                },
+                {
+                  "name": "AZURE_OPENAI_API_KEY",
+                  "secretRef": "azure-openai-key"
+                },
+                {
+                  "name": "LIVEKIT_URL",
+                  "value": "wss://zoro-pi-tawny.livekit.cloud"
+                },
+                {
+                  "name": "LIVEKIT_API_KEY",
+                  "secretRef": "livekit-api-key"
+                },
+                {
+                  "name": "LIVEKIT_API_SECRET",
+                  "secretRef": "livekit-api-secret"
+                },
+                {
+                  "name": "DEEPGRAM_API_KEY",
+                  "secretRef": "deepgram-api-key"
+                },
+                {
+                  "name": "CARTESIA_API_KEY",
+                  "secretRef": "cartesia-api-key"
+                },
+                {
+                  "name": "ANTHROPIC_API_KEY",
+                  "secretRef": "anthropic-api-key"
+                },
+                {
+                  "name": "TAVILY_API_KEY",
+                  "secretRef": "tavily-api-key"
+                },
+                {
+                  "name": "AZURE_POSTGRES_URL",
+                  "secretRef": "database-url"
+                },
+                {
+                  "name": "REDIS_URL",
+                  "secretRef": "redis-url"
+                },
+                {
+                  "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                  "secretRef": "appinsights-conn"
+                },
+                {
+                  "name": "SPOTIFY_CLIENT_ID",
+                  "value": "059100ebe86e4edb80741c971626ca26"
+                },
+                {
+                  "name": "SPOTIFY_CLIENT_SECRET",
+                  "secretRef": "spotify-secret"
+                },
+                {
+                  "name": "SPOTIFY_REDIRECT_URI",
+                  "value": "http://127.0.0.1:8888/callback"
+                },
+                {
+                  "name": "YOUTUBE_API_KEY",
+                  "secretRef": "youtube-api-key"
+                },
+                {
+                  "name": "GOOGLE_OAUTH_CLIENT_ID",
+                  "value": "385707213892-i0k5fbfj60cujrekp5r3pi07jm62efh7.apps.googleusercontent.com"
+                },
+                {
+                  "name": "GOOGLE_OAUTH_CLIENT_SECRET",
+                  "secretRef": "google-oauth-secret"
+                },
+                {
+                  "name": "AZURE_SPEECH_REGION",
+                  "value": "eastus2"
+                },
+                {
+                  "name": "AZURE_SPEECH_VOICE",
+                  "value": "en-GB-SoniaNeural"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 2
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "containerAppId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.App/containerApps', parameters('containerAppName'))]"
+    }
+  }
+}

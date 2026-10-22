@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ffmpeg \
     libasound2 \
+    libportaudio2 \
+    portaudio19-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install python dependencies
