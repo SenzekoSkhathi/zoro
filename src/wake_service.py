@@ -164,11 +164,7 @@ async def _handler(ws):
                 # as a spoken wake word would, so it connects and the agent
                 # delivers the queued directive.
                 print("[wake] proactive trigger -> notifying browser")
-                _summon_app("--proactive")
-                msg = json.dumps({"event": "proactive"})
-                for c in list(clients):
-                    if c is not ws:
-                        await c.send(msg)
+                _broadcast_proactive(asyncio.get_running_loop(), source_ws=ws)
     except ConnectionClosed:
         # The hosted UI's ws:// to loopback frequently drops without a close
         # handshake; that's expected, not an error. Swallow it so we don't log
@@ -180,6 +176,15 @@ async def _handler(ws):
         # lapses on its own (PAUSE_TTL_S), so a vanished client can't leave the
         # mic deaf even if it never sent a resume.
         print(f"[wake] client disconnected ({len(clients)} total)")
+
+
+def _broadcast_proactive(loop, source_ws=None):
+    """Notify all connected web clients to connect to Zoro for a proactive directive."""
+    _summon_app("--proactive")
+    msg = json.dumps({"event": "proactive"})
+    for ws in list(clients):
+        if ws is not source_ws:
+            loop.create_task(ws.send(msg))
 
 
 def _broadcast_wake(loop, name):
@@ -194,6 +199,24 @@ def _broadcast_wake(loop, name):
     msg = json.dumps({"event": "wake", "model": name})
     for ws in list(clients):
         loop.create_task(ws.send(msg))
+
+
+def _redis_proactive_loop(loop):
+    """Listen for proactive events emitted via Azure Redis across distributed workers."""
+    try:
+        import zoro_safety
+        r = zoro_safety._get_redis()
+        if not r:
+            return
+        pubsub = r.pubsub()
+        pubsub.subscribe("zoro:proactive:events")
+        print("[wake] subscribed to Azure Redis zoro:proactive:events", flush=True)
+        for message in pubsub.listen():
+            if message and message.get("type") == "message":
+                print("[wake] received proactive event from Azure Redis -> notifying browser", flush=True)
+                loop.call_soon_threadsafe(_broadcast_proactive, loop)
+    except Exception as e:
+        print(f"[wake] redis proactive subscriber ended: {e}", flush=True)
 
 
 def _audio_loop(loop):
@@ -221,6 +244,7 @@ def _audio_loop(loop):
 async def main():
     loop = asyncio.get_running_loop()
     threading.Thread(target=_audio_loop, args=(loop,), daemon=True).start()
+    threading.Thread(target=_redis_proactive_loop, args=(loop,), daemon=True).start()
     async with websockets.serve(_handler, HOST, PORT):
         print(f"[wake] WebSocket up on ws://{HOST}:{PORT}")
         await asyncio.Future()  # run forever

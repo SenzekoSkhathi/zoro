@@ -37,11 +37,7 @@ WAKE_WS = "ws://127.0.0.1:8765"
 
 
 def _pending_is_fresh() -> bool:
-    try:
-        d = json.loads(PENDING.read_text(encoding="utf-8"))
-        return (time.time() - float(d.get("ts", 0))) < PENDING_FRESH_SECONDS
-    except (OSError, ValueError):
-        return False
+    return zoro_safety.is_pending_directive_fresh(PENDING_FRESH_SECONDS)
 
 
 def _poke_wake() -> None:
@@ -63,14 +59,11 @@ def _fire(text: str, key: str) -> bool:
         return False
     if _pending_is_fresh():
         return False
-    try:
-        DATA.mkdir(parents=True, exist_ok=True)
-        PENDING.write_text(
-            json.dumps({"text": text, "ts": time.time(), "key": key}),
-            encoding="utf-8",
-        )
-    except OSError:
+    
+    # Store in Azure Redis and mirror locally
+    if not zoro_safety.set_pending_directive(text, key, ttl_seconds=PENDING_FRESH_SECONDS):
         return False
+
     zoro_safety.mark_announced(key)
     zoro_safety.record_interruption()
     _poke_wake()

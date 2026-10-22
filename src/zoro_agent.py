@@ -2776,31 +2776,11 @@ def _spotify_error(exc: Exception) -> str:
 
 def _consume_pending_directive() -> tuple[str | None, str | None]:
     """If the proactive service queued something for Zoro to say, return
-    (instruction, raw_text) and clear it. Stale directives (>10 min) are
-    dropped so she never opens with something that's no longer relevant.
-    raw_text is the human-facing line, used for the proactive toast card.
+    (instruction, raw_text) and clear it from Azure Redis (and local mirror).
+    Stale directives (>10 min) are dropped so she never opens with something that's
+    no longer relevant. raw_text is the human-facing line, used for the proactive toast card.
     """
-    import json
-
-    pending = _ROOT / "data" / "pending_directive.json"
-    try:
-        d = json.loads(pending.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None, None
-    try:
-        pending.unlink()
-    except OSError:
-        pass
-    if (datetime.now().timestamp() - float(d.get("ts", 0))) > 600:
-        return None, None
-    text = (d.get("text") or "").strip()
-    if not text:
-        return None, None
-    return (
-        "You are reaching out to the user proactively (not answering a "
-        "question). Deliver this naturally in your own voice as Zoro, in "
-        "one or two short spoken sentences, then stop:\n" + text
-    ), text
+    return zoro_safety.consume_pending_directive()
 
 
 def morning_directive() -> tuple[str, str | None]:

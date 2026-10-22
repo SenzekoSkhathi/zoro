@@ -529,3 +529,98 @@ def get_active_turn() -> str | None:
         except Exception:
             pass
     return None
+
+
+# --- proactive ambient directive state (Azure Redis + local mirror) --------
+
+PENDING_DIRECTIVE_FILE = _DATA / "pending_directive.json"
+
+
+def set_pending_directive(text: str, key: str, ttl_seconds: int = 600) -> bool:
+    """Store a pending proactive directive in Azure Redis for multi-device delivery,
+    publishing to the Redis events channel, and mirroring to the local file."""
+    payload = json.dumps({"text": text, "ts": time.time(), "key": key})
+    r = _get_redis()
+    if r:
+        try:
+            r.set("zoro:proactive:pending", payload, ex=ttl_seconds)
+            r.publish("zoro:proactive:events", json.dumps({"event": "proactive", "text": text, "key": key}))
+        except Exception:
+            pass
+
+    try:
+        _DATA.mkdir(parents=True, exist_ok=True)
+        PENDING_DIRECTIVE_FILE.write_text(payload, encoding="utf-8")
+    except OSError:
+        pass
+    return True
+
+
+def is_pending_directive_fresh(max_age_seconds: int = 600) -> bool:
+    """Check if an unconsumed proactive directive is still active."""
+    r = _get_redis()
+    if r:
+        try:
+            raw = r.get("zoro:proactive:pending")
+            if raw:
+                d = json.loads(raw)
+                return (time.time() - float(d.get("ts", 0))) < max_age_seconds
+        except Exception:
+            pass
+
+    try:
+        if PENDING_DIRECTIVE_FILE.exists():
+            d = json.loads(PENDING_DIRECTIVE_FILE.read_text(encoding="utf-8"))
+            return (time.time() - float(d.get("ts", 0))) < max_age_seconds
+    except (OSError, ValueError):
+        pass
+    return False
+
+
+def consume_pending_directive() -> tuple[str | None, str | None]:
+    """Retrieve and clear a pending proactive directive across devices.
+    Returns (instruction_for_llm, raw_text_for_ui)."""
+    data = None
+    r = _get_redis()
+    if r:
+        try:
+            pipe = r.pipeline()
+            pipe.get("zoro:proactive:pending")
+            pipe.delete("zoro:proactive:pending")
+            res = pipe.execute()
+            if res and res[0]:
+                data = json.loads(res[0])
+        except Exception:
+            data = None
+
+    if not data:
+        try:
+            if PENDING_DIRECTIVE_FILE.exists():
+                data = json.loads(PENDING_DIRECTIVE_FILE.read_text(encoding="utf-8"))
+                try:
+                    PENDING_DIRECTIVE_FILE.unlink()
+                except OSError:
+                    pass
+        except (OSError, ValueError):
+            return None, None
+
+    try:
+        if PENDING_DIRECTIVE_FILE.exists():
+            PENDING_DIRECTIVE_FILE.unlink()
+    except OSError:
+        pass
+
+    if not data:
+        return None, None
+
+    ts = float(data.get("ts", 0))
+    if time.time() - ts > 600:
+        return None, None
+    text = (data.get("text") or "").strip()
+    if not text:
+        return None, None
+    return (
+        f'A proactive directive is pending. Deliver it naturally and concisely as your opening remark: "{text}". Then invite a reply.',
+        text,
+    )
+
