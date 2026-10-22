@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useDataChannel } from "@livekit/components-react";
+import { useDataChannel, useRoomContext } from "@livekit/components-react";
 import { HudPanel } from "./HudPanel";
 import { useWidgetLimit } from "./WidgetLimit";
 import styles from "./ZoroDisplay.module.css";
@@ -154,6 +154,19 @@ type NowPlayingData =
     }
   | { empty: true };
 
+type BrowserData = {
+  url?: string;
+  title?: string;
+  screenshot?: string;
+  action?: string;
+  status?: string;
+  mode?: string;
+  waiting_for_user?: boolean;
+  is_headed?: boolean;
+  auth_required?: boolean;
+  reason?: string;
+};
+
 type DisplayCard =
   | { kind: "search"; data: SearchData }
   | { kind: "calendar"; data: CalendarData }
@@ -170,7 +183,7 @@ type DisplayCard =
   | { kind: "whatsapp"; data: WhatsAppData }
   | { kind: "youtube"; data: YouTubeData }
   | { kind: "system"; data: any }
-  | { kind: "browser"; data: any };
+  | { kind: "browser"; data: BrowserData };
 
 type WidgetKind = DisplayCard["kind"];
 
@@ -857,18 +870,137 @@ function SystemCard({ data, onClose }: { data: any; onClose: () => void }) {
   );
 }
 
-function BrowserCard({ data, onClose }: { data: any; onClose: () => void }) {
-  const { url, title, screenshot, action } = data || {};
+function BrowserCard({ data, onClose }: { data: BrowserData; onClose: () => void }) {
+  const room = useRoomContext();
+  const [isSending, setIsSending] = useState(false);
+  const { url, title, screenshot, action, status, mode, waiting_for_user, auth_required, reason } = data || {};
+
+  const isTakeover = Boolean(waiting_for_user || mode === "user_takeover" || status === "waiting_for_user");
+
+  const handleResume = async () => {
+    if (isSending || !room?.localParticipant) return;
+    setIsSending(true);
+    try {
+      const payload = new TextEncoder().encode(JSON.stringify({ action: "browser_resume" }));
+      await room.localParticipant.publishData(payload, { reliable: true, topic: "zoro.display" });
+    } catch (e) {
+      console.error("[ZoroDisplay] Failed to publish browser_resume:", e);
+    } finally {
+      setTimeout(() => setIsSending(false), 2000);
+    }
+  };
+
+  const handleHandoff = async () => {
+    if (isSending || !room?.localParticipant) return;
+    setIsSending(true);
+    try {
+      const payload = new TextEncoder().encode(JSON.stringify({ action: "browser_handoff", reason: "User requested takeover" }));
+      await room.localParticipant.publishData(payload, { reliable: true, topic: "zoro.display" });
+    } catch (e) {
+      console.error("[ZoroDisplay] Failed to publish browser_handoff:", e);
+    } finally {
+      setTimeout(() => setIsSending(false), 2000);
+    }
+  };
+
   return (
-    <HudPanel kind="BROWSER" meta={title || "ZORO BROWSER"} ariaLabel="Dedicated Browser View" onClose={onClose}>
-      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px", background: "rgba(10, 25, 35, 0.7)", padding: "6px 10px", borderRadius: "4px", border: "1px solid rgba(79, 227, 255, 0.2)" }}>
-        <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#4fe3ff", boxShadow: "0 0 8px #4fe3ff" }} />
-        <span style={{ fontFamily: "var(--font-geist-mono), monospace", fontSize: "0.75rem", color: "#a6e9ff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+    <HudPanel
+      kind="BROWSER"
+      meta={title || "ZORO BROWSER"}
+      accent={isTakeover ? "gold" : "cyan"}
+      ariaLabel="Dedicated Browser View"
+      onClose={onClose}
+    >
+      {/* Takeover Active Notice */}
+      {isTakeover && (
+        <div className={styles.takeoverBanner}>
+          <div className={styles.takeoverHeader}>
+            <div className={styles.takeoverPulse} />
+            <span className={styles.takeoverBadge}>HUMAN-IN-THE-LOOP TAKEOVER ACTIVE</span>
+          </div>
+          <p className={styles.takeoverText}>
+            A visible Chromium window is open on your desktop{reason ? ` for ${reason}` : ""}.
+            Please log in, solve any CAPTCHA/2FA, and click below when finished.
+          </p>
+          <button
+            type="button"
+            className={styles.takeoverButton}
+            onClick={handleResume}
+            disabled={isSending}
+          >
+            {isSending ? "Handing back to Zoro..." : "⚡ I'm Done — Hand Back to Zoro"}
+          </button>
+        </div>
+      )}
+
+      {/* Proactive Auth Gate Prompt (when detected and not yet handed off) */}
+      {!isTakeover && auth_required && (
+        <div className={styles.authGateBanner}>
+          <p className={styles.authGateText}>
+            🔐 <strong>Authentication Gate Detected:</strong> Login, password, or security check required.
+          </p>
+          <button
+            type="button"
+            className={styles.authGateButton}
+            onClick={handleHandoff}
+            disabled={isSending}
+          >
+            Take Over Window
+          </button>
+        </div>
+      )}
+
+      {/* URL bar */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          marginBottom: "8px",
+          background: isTakeover ? "rgba(35, 25, 10, 0.7)" : "rgba(10, 25, 35, 0.7)",
+          padding: "6px 10px",
+          borderRadius: "4px",
+          border: isTakeover
+            ? "1px solid rgba(255, 179, 0, 0.35)"
+            : "1px solid rgba(79, 227, 255, 0.2)",
+        }}
+      >
+        <div
+          style={{
+            width: "8px",
+            height: "8px",
+            borderRadius: "50%",
+            background: isTakeover ? "#ffb300" : "#4fe3ff",
+            boxShadow: isTakeover ? "0 0 8px #ffb300" : "0 0 8px #4fe3ff",
+          }}
+        />
+        <span
+          style={{
+            fontFamily: "var(--font-geist-mono), monospace",
+            fontSize: "0.75rem",
+            color: isTakeover ? "#ffe082" : "#a6e9ff",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
           {url || "about:blank"}
         </span>
       </div>
+
+      {/* Viewport Screenshot */}
       {screenshot && (
-        <div style={{ position: "relative", borderRadius: "6px", overflow: "hidden", border: "1px solid rgba(79, 227, 255, 0.25)", maxHeight: "400px" }}>
+        <div
+          style={{
+            position: "relative",
+            borderRadius: "6px",
+            overflow: "hidden",
+            border: isTakeover
+              ? "1px solid rgba(255, 179, 0, 0.35)"
+              : "1px solid rgba(79, 227, 255, 0.25)",
+            maxHeight: "400px",
+          }}
+        >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={`data:image/jpeg;base64,${screenshot}`}
@@ -877,16 +1009,27 @@ function BrowserCard({ data, onClose }: { data: any; onClose: () => void }) {
           />
         </div>
       )}
-      {action && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
-          <span style={{ fontSize: "0.75rem", color: "#74aec4", fontStyle: "italic" }}>
-            {action}
-          </span>
-          <span style={{ fontSize: "0.65rem", padding: "2px 6px", background: "rgba(79, 227, 255, 0.15)", borderRadius: "3px", color: "#4fe3ff", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-            Autonomous
-          </span>
-        </div>
-      )}
+
+      {/* Action / Status footer */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
+        <span style={{ fontSize: "0.75rem", color: isTakeover ? "#ffca28" : "#74aec4", fontStyle: "italic" }}>
+          {action || (isTakeover ? "Waiting for user authentication..." : "Idle")}
+        </span>
+        <span
+          style={{
+            fontSize: "0.65rem",
+            padding: "2px 6px",
+            background: isTakeover ? "rgba(255, 179, 0, 0.2)" : "rgba(79, 227, 255, 0.15)",
+            borderRadius: "3px",
+            color: isTakeover ? "#ffd54f" : "#4fe3ff",
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            fontWeight: 600,
+          }}
+        >
+          {isTakeover ? "User Takeover" : "Autonomous"}
+        </span>
+      </div>
     </HudPanel>
   );
 }

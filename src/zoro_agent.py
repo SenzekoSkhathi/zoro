@@ -1393,7 +1393,10 @@ class Zoro(Agent):
         if not res.get("ok"):
             return res.get("error", "Failed to navigate.")
         await publish_display("browser", res)
-        return f"Opened {res.get('title')} at {res.get('url')}."
+        msg = f"Opened {res.get('title')} at {res.get('url')}."
+        if res.get("auth_required"):
+            msg += " Notice: An authentication screen, login form, or security check was detected on this page. If you need to sign in or solve 2FA, call browser_handoff so the user can enter credentials."
+        return msg
 
     @function_tool()
     @_logged
@@ -1408,7 +1411,53 @@ class Zoro(Agent):
         if not res.get("ok"):
             return res.get("error", "Could not click element.")
         await publish_display("browser", res)
-        return f"Clicked '{target}'. Current page: {res.get('title')}."
+        msg = f"Clicked '{target}'. Current page: {res.get('title')}."
+        if res.get("auth_required"):
+            msg += " Notice: An authentication screen or login form was detected. If login or 2FA is needed, invoke browser_handoff."
+        return msg
+
+    @function_tool()
+    @_logged
+    async def browser_handoff(
+        self, context: RunContext, reason: str = "Please log in or authenticate"
+    ) -> str:
+        """Switch Zoro's browser to a visible desktop window so the user can log in or solve 2FA/CAPTCHA.
+
+        Call this when an authentication gate, CAPTCHA, or sign-in page is reached, or when the
+        user asks to take over Zoro's browser window to input sensitive credentials.
+        The browser window pops up directly on the user's desktop at the current page.
+        When finished, the user can say "Zoro, I'm logged in" or click 'Hand Back to Zoro'.
+
+        Args:
+            reason: The reason for the handoff (e.g. 'Sign in to GitHub', 'Solve Cloudflare CAPTCHA').
+        """
+        browser = zoro_browser.get_browser()
+        res = await browser.handoff_to_user(reason)
+        if not res.get("ok"):
+            return res.get("error", "Could not open browser window on desktop.")
+        await publish_display("browser", res)
+        return (
+            f"I have opened the browser on your desktop so you can {reason}. "
+            "Whenever you are ready, just let me know or click 'Hand back to Zoro', and I will resume background control."
+        )
+
+    @function_tool()
+    @_logged
+    async def browser_resume(self, context: RunContext) -> str:
+        """Resume autonomous background browsing after the user has finished logging in or authenticating.
+
+        Closes the visible desktop browser window while preserving all session cookies, tokens, and storage,
+        and returns Zoro to autonomous background control.
+        """
+        browser = zoro_browser.get_browser()
+        res = await browser.resume_from_user()
+        if not res.get("ok"):
+            return res.get("error", "Could not resume autonomous browser control.")
+        await publish_display("browser", res)
+        return (
+            f"Thank you, Sir! I have resumed autonomous control at {res.get('title')} ({res.get('url')}). "
+            "All session credentials and cookies are safely saved. What would you like me to do next?"
+        )
 
     @function_tool()
     @_logged
@@ -3222,6 +3271,40 @@ async def entrypoint(ctx: JobContext) -> None:
 
     zoro_telemetry.track_event('zoro_session_start', {'room': ctx.room.name, 'llm': llm_label, 'session_id': _SESSION_ID})
     await session.start(agent=Zoro(instructions), room=ctx.room)
+
+    @ctx.room.on("data_received")
+    def _on_room_data(dp) -> None:
+        try:
+            raw = dp.data.decode("utf-8") if isinstance(dp.data, (bytes, bytearray)) else str(dp.data)
+            payload = json.loads(raw)
+            action = payload.get("action")
+            if action == "browser_resume":
+                print("[zoro] client triggered browser_resume via data channel", flush=True)
+
+                async def _resume_job():
+                    b = zoro_browser.get_browser()
+                    r = await b.resume_from_user()
+                    await publish_display("browser", r)
+                    await session.generate_reply(
+                        instructions=(
+                            "The user clicked 'Hand Back to Zoro' after finishing login on the desktop browser. "
+                            f"Briefly confirm in one sentence that you have resumed autonomous control of {r.get('title', 'the browser')}, "
+                            "and ask what they'd like you to do next."
+                        )
+                    )
+
+                asyncio.create_task(_resume_job())
+            elif action == "browser_handoff":
+                print("[zoro] client triggered browser_handoff via data channel", flush=True)
+
+                async def _handoff_job():
+                    b = zoro_browser.get_browser()
+                    r = await b.handoff_to_user(payload.get("reason", "User requested takeover"))
+                    await publish_display("browser", r)
+
+                asyncio.create_task(_handoff_job())
+        except Exception as e:
+            print(f"[zoro] room data handling skipped: {e}", flush=True)
 
     # Follow Spotify in the background so the now-playing card stays live
     # when playback moves on its own (a track finishing, or the user
