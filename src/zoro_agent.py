@@ -9,6 +9,7 @@ Run locally in console mode (no phone / web UI needed yet):
 
 import asyncio
 import functools
+import importlib
 import inspect
 import json
 import os
@@ -32,7 +33,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 import httpx
 from dotenv import load_dotenv
-from livekit.agents import (
+from livekit.agents import (  # pyright: ignore[reportMissingImports]
     Agent,
     AgentSession,
     JobContext,
@@ -42,28 +43,35 @@ from livekit.agents import (
     function_tool,
     get_job_context,
 )
-from livekit.plugins import anthropic, azure, cartesia, deepgram, openai, silero
+from livekit.plugins import (  # pyright: ignore[reportMissingImports]
+    anthropic,
+    azure,
+    cartesia,
+    deepgram,
+    openai,
+    silero,
+)
 
-import zoro_browser
-import zoro_claude_code
-import zoro_computer
-import zoro_corrections
-import zoro_episodes
-import zoro_lessons
-import zoro_reflector
-import zoro_github
-import zoro_google
-import zoro_memory
-import zoro_safety
-import zoro_shell
-import zoro_retry
-import zoro_spotify
-import zoro_tasks
-import zoro_tools
-import zoro_whatsapp
-import zoro_youtube
-import zoro_telemetry
-from zoro_prompt import ZORO_SYSTEM_PROMPT
+import zoro_browser  # pyright: ignore[reportMissingImports]
+import zoro_claude_code # pyright: ignore[reportMissingImports]
+import zoro_computer # pyright: ignore[reportMissingImports]
+import zoro_corrections # pyright: ignore[reportMissingImports]
+import zoro_episodes # pyright: ignore[reportMissingImports]
+import zoro_lessons  # pyright: ignore[reportMissingImports]
+import zoro_reflector  # pyright: ignore[reportMissingImports]
+import zoro_github # pyright: ignore[reportMissingImports]
+import zoro_google # pyright: ignore[reportMissingImports]
+import zoro_memory  # pyright: ignore[reportMissingImports]
+import zoro_safety  # pyright: ignore[reportMissingImports]
+import zoro_shell  # pyright: ignore[reportMissingImports]
+import zoro_retry  # pyright: ignore[reportMissingImports]
+import zoro_spotify  # pyright: ignore[reportMissingImports]
+import zoro_tasks # pyright: ignore[reportMissingImports]
+import zoro_tools  # pyright: ignore[reportMissingImports]
+import zoro_whatsapp # pyright: ignore[reportMissingImports]
+import zoro_youtube # pyright: ignore[reportMissingImports]
+import zoro_telemetry # pyright: ignore[reportMissingImports]
+from zoro_prompt import ZORO_SYSTEM_PROMPT  # pyright: ignore[reportMissingImports]
 
 zoro_telemetry.init_telemetry()
 
@@ -281,7 +289,7 @@ async def _speak_or_queue(session, text: str) -> None:
     except Exception:  # noqa: BLE001 - fall through to proactive queue
         pass
     try:
-        import zoro_proactive
+        import zoro_proactive  # pyright: ignore[reportMissingImports]
 
         zoro_proactive._fire(text, f"claude_done_{int(time.time())}")
     except Exception as e:  # noqa: BLE001
@@ -732,7 +740,6 @@ def _similar_episodes_block() -> str:
     string if nothing is available."""
     daily = None
     try:
-        import zoro_reflector
         daily = zoro_reflector.unspoken_report()
     except Exception:  # noqa: BLE001
         daily = None
@@ -2120,7 +2127,7 @@ class Zoro(Agent):
         Use this when Skhathi asks "what sub-agents do you have" or
         before you decide which role to pass to ask_claude_code.
         """
-        import zoro_subagents
+        import zoro_subagents  # pyright: ignore[reportMissingImports]
         agents = await asyncio.to_thread(zoro_subagents.list_agents)
         if not agents:
             return "I have no sub-agents yet."
@@ -3059,9 +3066,15 @@ def _gh_error(exc: Exception) -> str:
 
 def _spotify_error(exc: Exception) -> str:
     """Translate spotipy failures into a sentence Zoro can speak aloud."""
-    from spotipy.exceptions import SpotifyException
+    # Keep spotipy optional: importing this module should still work when the
+    # Spotify integration's dependency is not installed.
+    try:
+        spotify_exceptions = importlib.import_module("spotipy.exceptions")
+        spotify_exception = spotify_exceptions.SpotifyException
+    except (ImportError, AttributeError):
+        spotify_exception = ()
 
-    if isinstance(exc, SpotifyException):
+    if isinstance(exc, spotify_exception):
         status = exc.http_status
         reason = (getattr(exc, "reason", "") or "").upper()
         msg = str(exc)

@@ -73,6 +73,7 @@ def _services() -> dict[str, tuple[list[str], Path]]:
         # supervisor fully owns and can restart deterministically.
         "agent": ([str(PY), "src/zoro_agent.py", "start"], ROOT),
         **({"wake": ([str(PY), "src/wake_service.py"], ROOT)} if (ROOT / "src" / "wake_service.py").exists() else {}),
+        "screen_relay": ([str(PY), "src/zoro_screen_relay.py"], ROOT),
         "proactive": ([str(PY), "src/zoro_proactive.py"], ROOT),
         "reflector": ([str(PY), "src/zoro_reflector.py"], ROOT),
         # NOTE: the local Next dev server (localhost:3000) is intentionally

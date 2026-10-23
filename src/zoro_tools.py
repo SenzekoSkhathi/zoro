@@ -606,26 +606,57 @@ def media_key(action: str, repeat: int = 1) -> None:
 
 
 def capture_screen_b64(max_edge: int = 1568) -> tuple[str, str]:
-    """Grab the primary monitor, downscale for Claude vision, return
-    (base64 png, media_type). max_edge keeps the long side within Claude's
-    recommended size so the call stays fast and cheap."""
+    """Grab the primary monitor, downscale for vision, return (base64, media_type).
+    When running in cloud/Linux mode (e.g. Azure Container Apps worker), transparently
+    requests the screen capture from the user's logged-in Windows session via the
+    encrypted Azure Redis screen relay. When running locally on Windows, captures directly."""
     import base64
     import io
+    import os
+    import sys
 
+    is_windows = sys.platform == "win32"
+    is_cloud = os.environ.get("ZORO_CLOUD") == "1" or not is_windows
+
+    if is_cloud:
+        try:
+            import zoro_screen_relay
+            return zoro_screen_relay.request_screen_from_relay(max_edge=max_edge)
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not capture screen from Windows laptop via relay: {e}. "
+                "Ensure Zoro Screen Relay or Zoro Supervisor is running on your Windows laptop."
+            ) from e
+
+    # Running locally on Windows: attach to desktop and capture directly
     import mss
     from PIL import Image
 
-    with mss.mss() as sct:
-        mon = sct.monitors[1]  # [0] is the virtual all-monitors box
-        shot = sct.grab(mon)
-    img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-    w, h = img.size
-    scale = min(1.0, max_edge / float(max(w, h)))
-    if scale < 1.0:
-        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode("ascii"), "image/png"
+    try:
+        import zoro_screen_relay
+        zoro_screen_relay.attach_to_user_desktop()
+    except Exception:
+        pass
+
+    try:
+        with mss.mss() as sct:
+            mon = sct.monitors[1]  # [0] is the virtual all-monitors box
+            shot = sct.grab(mon)
+        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+        w, h = img.size
+        scale = min(1.0, max_edge / float(max(w, h)))
+        if scale < 1.0:
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        return base64.b64encode(buf.getvalue()).decode("ascii"), "image/png"
+    except Exception as local_err:
+        # Fallback to relay even on Windows if direct display handle fails
+        try:
+            import zoro_screen_relay
+            return zoro_screen_relay.request_screen_from_relay(max_edge=max_edge)
+        except Exception:
+            raise local_err
 
 
 def _vision_answer(
@@ -667,12 +698,13 @@ def _vision_answer(
                         ],
                     }
                 ],
+                reasoning_effort="none",
                 max_completion_tokens=400,
             )
             ans = resp.choices[0].message.content
             return (ans or "").strip() or "I couldn't make sense of the screen."
-        except Exception:
-            pass
+        except Exception as e:
+            return f"Vision analysis error: {e}"
 
     import anthropic
 
