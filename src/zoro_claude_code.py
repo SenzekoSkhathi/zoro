@@ -51,7 +51,7 @@ async def _git(*args: str, cwd: Path = ZORO_ROOT) -> tuple[int, str]:
 
 
 async def _has_changes() -> bool:
-    rc, out = await _git("status", "--porcelain")
+    rc, out = await _git("status", "--porcelain", "--untracked-files=no")
     return rc == 0 and bool(out.strip())
 
 
@@ -454,22 +454,33 @@ async def run_streaming(
     is_self_mod = work_dir.resolve() == ZORO_ROOT.resolve()
     branch: Optional[str] = None
     if is_self_mod:
-        # Ensure we're starting from a clean main; if the working tree
-        # is dirty, refuse — we don't want to entangle user-in-progress
-        # edits with an autonomous rewrite.
-        rc, out = await _git("status", "--porcelain")
-        if rc != 0 or out.strip():
-            yield {
-                "kind": "error",
-                "text": "working tree not clean; refusing self-mod",
-            }
-            return
-        await _git("checkout", "main")
-        branch = f"zoro-self-mod/{int(time.time())}"
-        rc, out = await _git("checkout", "-b", branch)
-        if rc != 0:
-            yield {"kind": "error", "text": f"could not branch: {out}"}
-            return
+        # Check whether work_dir is inside a git repository
+        rc_repo, repo_out = await _git("rev-parse", "--is-inside-work-tree", cwd=work_dir)
+        has_git_repo = rc_repo == 0 and "true" in repo_out.lower()
+
+        if has_git_repo:
+            # Ensure we're starting from a clean main (ignoring untracked files); if the working tree
+            # is dirty, refuse — we don't want to entangle user-in-progress
+            # edits with an autonomous rewrite.
+            rc, out = await _git("status", "--porcelain", "--untracked-files=no", cwd=work_dir)
+            if rc != 0:
+                yield {
+                    "kind": "error",
+                    "text": f"git status failed: {out}",
+                }
+                return
+            if out.strip():
+                yield {
+                    "kind": "error",
+                    "text": "working tree not clean; refusing self-mod",
+                }
+                return
+            await _git("checkout", "main", cwd=work_dir)
+            branch = f"zoro-self-mod/{int(time.time())}"
+            rc, out = await _git("checkout", "-b", branch, cwd=work_dir)
+            if rc != 0:
+                yield {"kind": "error", "text": f"could not branch: {out}"}
+                return
     # Claude defaults to asking clarifying questions via AskUserQuestion,
     # which makes no sense here — nobody is at the terminal. Force
     # autonomy via a system-prompt addendum AND deny the interactive

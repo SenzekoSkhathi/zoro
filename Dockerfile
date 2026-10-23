@@ -18,6 +18,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     portaudio19-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Configure git identity and safe directory
+RUN git config --global user.name "Zoro Autonomous Core" && \
+    git config --global user.email "zoro@lumen-ai.co.za" && \
+    git config --global init.defaultBranch main && \
+    git config --global --add safe.directory /app
+
 # Install python dependencies for Cloud Core
 COPY requirements-server.txt .
 RUN pip install --upgrade pip && \
@@ -26,6 +32,12 @@ RUN pip install --upgrade pip && \
 # Copy application source code
 COPY src/ ./src/
 COPY data/ ./data/
+COPY .gitignore ./
+
+# Initialize local git repository so branch isolation and git status checks are clean
+RUN git init && \
+    git add -A && \
+    git commit -m "init: zoro cloud core baseline"
 
 # Default entrypoint: Run LiveKit worker agent
 CMD ["python", "src/zoro_agent.py", "start"]
