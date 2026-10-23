@@ -50,6 +50,8 @@ Write-Host "  Loaded $($envMap.Count) configuration keys." -ForegroundColor Gree
 # 4. Deploy Bicep template to Azure Container Apps
 Write-Host "`n[3/3] Deploying 'zoro-agent' Container App to Azure Container Apps..." -ForegroundColor Yellow
 
+$anthropicApiKey = if ($envMap['ANTHROPIC_API_KEY']) { $envMap['ANTHROPIC_API_KEY'] } else { "disconnected" }
+
 $deploymentArgs = @(
     "deployment", "group", "create",
     "--resource-group", "LumenAI",
@@ -58,14 +60,14 @@ $deploymentArgs = @(
     "containerAppName=zoro-agent",
     "environmentName=baseform-env-za",
     "location=southafricanorth",
-    "containerImage=baseformacrza.azurecr.io/zoro-agent:latest",
+    "containerImage=baseformacrza.azurecr.io/zoro-agent:v7",
     "livekitUrl=$($envMap['LIVEKIT_URL'])",
     "azureOpenAiApiKey=$($envMap['AZURE_OPENAI_API_KEY'])",
     "livekitApiKey=$($envMap['LIVEKIT_API_KEY'])",
     "livekitApiSecret=$($envMap['LIVEKIT_API_SECRET'])",
     "deepgramApiKey=$($envMap['DEEPGRAM_API_KEY'])",
     "cartesiaApiKey=$($envMap['CARTESIA_API_KEY'])",
-    "anthropicApiKey=$($envMap['ANTHROPIC_API_KEY'])",
+    "anthropicApiKey=$anthropicApiKey",
     "tavilyApiKey=$($envMap['TAVILY_API_KEY'])",
     "azurePostgresUrl=$($envMap['AZURE_POSTGRES_URL'])",
     "redisUrl=$($envMap['REDIS_URL'])",
