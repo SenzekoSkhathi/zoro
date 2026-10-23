@@ -8,3 +8,4 @@ Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = root
 ' 0 = hidden window, False = don't wait for return
 sh.Run """" & pythonw & """ """ & script & """", 0, False
+

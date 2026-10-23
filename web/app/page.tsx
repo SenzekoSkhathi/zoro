@@ -435,9 +435,9 @@ function ZoroConversation({
   useEffect(() => {
     if (!contentShown) return;
     const measure = () => {
-      const orbBox = 220 * 0.42; // docked Orb visual size (scale in CSS)
-      const cx = window.innerWidth - 26 - orbBox / 2;
-      const cy = window.innerHeight - 26 - orbBox / 2;
+      const orbSize = 92; // docked Siri Orb diameter
+      const cx = window.innerWidth - 18 - orbSize / 2;
+      const cy = window.innerHeight - 18 - orbSize / 2;
       const tx = window.innerWidth / 2;
       const ty = window.innerHeight / 2;
       const dx = tx - cx;
