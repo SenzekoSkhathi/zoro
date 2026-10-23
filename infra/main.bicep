@@ -59,6 +59,12 @@ param youtubeApiKey string = ''
 param googleOauthClientSecret string = ''
 
 @secure()
+param googleWorkspaceCredentialsB64 string = ''
+
+@secure()
+param spotifyTokenB64 string = ''
+
+@secure()
 param githubToken string = ''
 
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
@@ -132,6 +138,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'google-oauth-secret'
           value: googleOauthClientSecret
+        }
+        {
+          name: 'google-workspace-creds-b64'
+          value: googleWorkspaceCredentialsB64
+        }
+        {
+          name: 'spotify-token-b64'
+          value: spotifyTokenB64
         }
         {
           name: 'github-token'
@@ -251,6 +265,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'GITHUB_TOKEN'
               secretRef: 'github-token'
+            }
+            {
+              name: 'GOOGLE_WORKSPACE_CREDENTIALS_B64'
+              secretRef: 'google-workspace-creds-b64'
+            }
+            {
+              name: 'SPOTIFY_TOKEN_B64'
+              secretRef: 'spotify-token-b64'
             }
           ]
         }

@@ -195,7 +195,7 @@ def _execute_local_tool(work_dir: Path, name: str, args: dict) -> str:
             return f"Error: file {path_arg} does not exist."
         try:
             content = target_path.read_text(encoding="utf-8", errors="replace")
-            return content if len(content) <= 60000 else content[:60000] + "\n...(truncated)"
+            return content if len(content) <= 30000 else content[:30000] + "\n...(truncated to 30,000 chars)"
         except Exception as e:
             return f"Error reading {path_arg}: {e}"
 
@@ -413,20 +413,35 @@ async def _run_azure_coder_streaming(
     ]
 
     for turn in range(30):
-        try:
-            loop = asyncio.get_running_loop()
-            resp = await loop.run_in_executor(
-                None,
-                lambda: client.chat.completions.create(
-                    model=dep,
-                    messages=messages,
-                    tools=tools if tools else None,
-                    reasoning_effort="none",
-                    max_completion_tokens=4096,
-                ),
-            )
-        except Exception as e:
-            yield {"kind": "error", "text": f"Azure OpenAI call failed: {e}"}
+        if turn > 0:
+            await asyncio.sleep(1.2)
+
+        resp = None
+        for attempt in range(3):
+            try:
+                loop = asyncio.get_running_loop()
+                resp = await loop.run_in_executor(
+                    None,
+                    lambda: client.chat.completions.create(
+                        model=dep,
+                        messages=messages,
+                        tools=tools if tools else None,
+                        reasoning_effort="none",
+                        max_completion_tokens=4096,
+                    ),
+                )
+                break
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("429" in err_str or "rate_limit" in err_str) and attempt < 2:
+                    wait_sec = 6 * (attempt + 1)
+                    yield {"kind": "narration", "text": f"Azure OpenAI rate limit hit, backing off {wait_sec}s..."}
+                    await asyncio.sleep(wait_sec)
+                    continue
+                yield {"kind": "error", "text": f"Azure OpenAI call failed: {e}"}
+                return
+
+        if not resp:
             return
 
         choice = resp.choices[0]

@@ -51,6 +51,27 @@ def _oauth() -> SpotifyOAuth:
 
 def _client() -> spotipy.Spotify:
     if not _CACHE_PATH.exists():
+        # Fallback to environment variable (e.g. on Azure Container Apps)
+        env_b64 = os.environ.get("SPOTIFY_TOKEN_B64")
+        env_raw = os.environ.get("SPOTIFY_TOKEN_JSON")
+        raw_text = None
+        if env_b64 and env_b64 not in ("none", "disconnected", ""):
+            import base64
+            try:
+                raw_text = base64.b64decode(env_b64).decode("utf-8")
+            except Exception:
+                pass
+        elif env_raw and env_raw not in ("none", "disconnected", ""):
+            raw_text = env_raw
+
+        if raw_text:
+            try:
+                _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                _CACHE_PATH.write_text(raw_text.strip(), encoding="utf-8")
+            except OSError:
+                pass
+
+    if not _CACHE_PATH.exists():
         raise RuntimeError(
             "Spotify is not authorised. Run "
             "`.venv/Scripts/python.exe scripts/zoro_spotify_auth.py` once."

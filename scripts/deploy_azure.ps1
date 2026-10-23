@@ -52,6 +52,16 @@ Write-Host "`n[3/3] Deploying 'zoro-agent' Container App to Azure Container Apps
 
 $anthropicApiKey = if ($envMap['ANTHROPIC_API_KEY']) { $envMap['ANTHROPIC_API_KEY'] } else { "disconnected" }
 
+$googleCredsFile = "$HOME\.google_workspace_mcp\credentials\senzekonduli28@gmail.com.json"
+$googleCredsB64 = if (Test-Path $googleCredsFile) {
+    [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($googleCredsFile))
+} else { "none" }
+
+$spotifyTokenFile = "$HOME\.zoro_spotify\token.json"
+$spotifyTokenB64 = if (Test-Path $spotifyTokenFile) {
+    [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($spotifyTokenFile))
+} else { "none" }
+
 $deploymentArgs = @(
     "deployment", "group", "create",
     "--resource-group", "LumenAI",
@@ -60,7 +70,7 @@ $deploymentArgs = @(
     "containerAppName=zoro-agent",
     "environmentName=baseform-env-za",
     "location=southafricanorth",
-    "containerImage=baseformacrza.azurecr.io/zoro-agent:v7",
+    "containerImage=baseformacrza.azurecr.io/zoro-agent:v8",
     "livekitUrl=$($envMap['LIVEKIT_URL'])",
     "azureOpenAiApiKey=$($envMap['AZURE_OPENAI_API_KEY'])",
     "livekitApiKey=$($envMap['LIVEKIT_API_KEY'])",
@@ -75,6 +85,8 @@ $deploymentArgs = @(
     "spotifyClientSecret=$($envMap['SPOTIFY_CLIENT_SECRET'])",
     "youtubeApiKey=$($envMap['YOUTUBE_API_KEY'])",
     "googleOauthClientSecret=$($envMap['GOOGLE_OAUTH_CLIENT_SECRET'])",
+    "googleWorkspaceCredentialsB64=$googleCredsB64",
+    "spotifyTokenB64=$spotifyTokenB64",
     "githubToken=$($envMap['GITHUB_TOKEN'])"
 )
 

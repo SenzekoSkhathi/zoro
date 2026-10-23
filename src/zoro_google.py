@@ -26,7 +26,35 @@ def _cred_path(account: str) -> Path:
 
 
 def _load_credentials(account: str) -> Credentials:
-    raw = json.loads(_cred_path(account).read_text(encoding="utf-8"))
+    path = _cred_path(account)
+    if not path.exists():
+        # Fallback to environment variable (e.g. on Azure Container Apps)
+        env_b64 = os.environ.get("GOOGLE_WORKSPACE_CREDENTIALS_B64")
+        env_raw = os.environ.get("GOOGLE_WORKSPACE_CREDENTIALS_JSON")
+        raw_text = None
+        if env_b64 and env_b64 not in ("none", "disconnected", ""):
+            import base64
+            try:
+                raw_text = base64.b64decode(env_b64).decode("utf-8")
+            except Exception:
+                pass
+        elif env_raw and env_raw not in ("none", "disconnected", ""):
+            raw_text = env_raw
+
+        if raw_text:
+            try:
+                _CRED_DIR.mkdir(parents=True, exist_ok=True)
+                path.write_text(raw_text.strip(), encoding="utf-8")
+            except OSError:
+                pass
+            raw = json.loads(raw_text)
+        else:
+            raise FileNotFoundError(
+                f"No credentials found for Google account '{account}'. "
+                f"Expected file at {path} or GOOGLE_WORKSPACE_CREDENTIALS_B64 in environment."
+            )
+    else:
+        raw = json.loads(path.read_text(encoding="utf-8"))
     creds = Credentials(
         token=raw.get("token"),
         refresh_token=raw.get("refresh_token"),
