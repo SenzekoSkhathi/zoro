@@ -9,10 +9,51 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
+    Manager, WebviewWindow, WindowEvent,
 };
+
+#[tauri::command]
+fn start_drag(window: WebviewWindow) -> Result<(), String> {
+    window.start_dragging().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn toggle_always_on_top(window: WebviewWindow) -> Result<bool, String> {
+    let current = window.is_always_on_top().map_err(|e| e.to_string())?;
+    let next = !current;
+    window.set_always_on_top(next).map_err(|e| e.to_string())?;
+    Ok(next)
+}
+
+#[tauri::command]
+fn set_always_on_top(window: WebviewWindow, enabled: bool) -> Result<bool, String> {
+    window.set_always_on_top(enabled).map_err(|e| e.to_string())?;
+    Ok(enabled)
+}
+
+#[tauri::command]
+fn get_always_on_top(window: WebviewWindow) -> Result<bool, String> {
+    window.is_always_on_top().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_window_size(window: WebviewWindow, width: f64, height: f64) -> Result<(), String> {
+    if let Ok(Some(monitor)) = window.primary_monitor() {
+        let scale = monitor.scale_factor();
+        window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+            width: (width * scale) as u32,
+            height: (height * scale) as u32,
+        })).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn hide_window(window: WebviewWindow) -> Result<(), String> {
+    window.hide().map_err(|e| e.to_string())
+}
 
 /// Reveal + focus the main window (used by the tray, and by the wake-summon
 /// single-instance callback).
@@ -54,6 +95,14 @@ fn main() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .invoke_handler(tauri::generate_handler![
+            start_drag,
+            toggle_always_on_top,
+            set_always_on_top,
+            get_always_on_top,
+            set_window_size,
+            hide_window
+        ])
         .setup(|app| {
             // Enable launch-at-login (idempotent).
             {
@@ -61,18 +110,51 @@ fn main() {
                 let _ = app.autolaunch().enable();
             }
 
-            // System tray with Show / Quit.
+            // System tray with Show / Hide / Always On Top / Reset / Quit.
             let show_i = MenuItem::with_id(app, "show", "Show Zoro", true, None::<&str>)?;
+            let hide_i = MenuItem::with_id(app, "hide", "Hide Zoro", true, None::<&str>)?;
+            let top_i = MenuItem::with_id(app, "toggle_top", "Toggle Always on Top", true, None::<&str>)?;
+            let reset_pos_i = MenuItem::with_id(app, "reset_pos", "Reset Position (Bottom-Right)", true, None::<&str>)?;
+            let sep = PredefinedMenuItem::separator(app)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit Zoro", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            let menu = Menu::with_items(app, &[&show_i, &hide_i, &top_i, &reset_pos_i, &sep, &quit_i])?;
 
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("Zoro")
+                .tooltip("Zoro - Voice Assistant")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => surface_main(app),
+                    "hide" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.hide();
+                        }
+                    }
+                    "toggle_top" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            if let Ok(cur) = win.is_always_on_top() {
+                                let _ = win.set_always_on_top(!cur);
+                            }
+                        }
+                    }
+                    "reset_pos" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            if let Ok(Some(monitor)) = win.primary_monitor() {
+                                let screen_size = monitor.size();
+                                let scale = monitor.scale_factor();
+                                let win_w = (240.0 * scale) as i32;
+                                let win_h = (240.0 * scale) as i32;
+                                let pos_x = (screen_size.width as i32) - win_w - (24.0 * scale) as i32;
+                                let pos_y = (screen_size.height as i32) - win_h - (60.0 * scale) as i32;
+                                let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }));
+                                let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                                    width: win_w as u32,
+                                    height: win_h as u32,
+                                }));
+                            }
+                        }
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -88,16 +170,21 @@ fn main() {
                 })
                 .build(app)?;
 
-            // Anchor the floating window to the bottom-right of the primary display
+            // Anchor the floating window to the bottom-right of the primary display in compact Orb mode
             if let Some(win) = app.get_webview_window("main") {
                 if let Ok(Some(monitor)) = win.primary_monitor() {
                     let screen_size = monitor.size();
                     let scale = monitor.scale_factor();
-                    let win_w = (500.0 * scale) as i32;
-                    let win_h = (860.0 * scale) as i32;
-                    let pos_x = (screen_size.width as i32) - win_w - (20.0 * scale) as i32;
+                    // Compact 240x240 initial box around the Orb — does not block screen buttons!
+                    let win_w = (240.0 * scale) as i32;
+                    let win_h = (240.0 * scale) as i32;
+                    let pos_x = (screen_size.width as i32) - win_w - (24.0 * scale) as i32;
                     let pos_y = (screen_size.height as i32) - win_h - (60.0 * scale) as i32;
                     let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }));
+                    let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                        width: win_w as u32,
+                        height: win_h as u32,
+                    }));
                 }
 
                 if let Ok(url_str) = std::env::var("ZORO_OVERLAY_URL") {
