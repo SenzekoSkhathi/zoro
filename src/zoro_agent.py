@@ -1,7 +1,7 @@
 """Zoro — voice-first assistant agent.
 
-Phase 1: desktop, push-to-talk. Pipeline:
-  mic -> Deepgram (STT) -> Claude (brain) -> Deepgram Aura (TTS) -> speakers
+Pipeline:
+  mic -> Azure Speech (STT) -> Azure OpenAI (brain) -> Azure Neural (TTS) -> speakers
 
 Run locally in console mode (no phone / web UI needed yet):
     .venv/Scripts/python.exe src/zoro_agent.py console
@@ -27,7 +27,7 @@ from pathlib import Path
 # src/zoro_agent.py console` works without a PYTHONUTF8 prefix.
 for _stream in (sys.stdout, sys.stderr):
     try:
-        _stream.reconfigure(encoding="utf-8")
+        _stream.reconfigure(encoding="utf-8")  # pyright: ignore[reportAttributeAccessIssue]
     except (AttributeError, ValueError):
         pass
 
@@ -46,8 +46,7 @@ from livekit.agents import (  # pyright: ignore[reportMissingImports]
 from livekit.plugins import (  # pyright: ignore[reportMissingImports]
     anthropic,
     azure,
-    cartesia,
-    deepgram,
+    elevenlabs,
     openai,
     silero,
 )
@@ -71,8 +70,10 @@ import zoro_tools  # pyright: ignore[reportMissingImports]
 import zoro_whatsapp # pyright: ignore[reportMissingImports]
 import zoro_youtube # pyright: ignore[reportMissingImports]
 import zoro_telemetry # pyright: ignore[reportMissingImports]
+import zoro_schema_cache # pyright: ignore[reportMissingImports]
 from zoro_prompt import ZORO_SYSTEM_PROMPT  # pyright: ignore[reportMissingImports]
 
+zoro_schema_cache.install_schema_cache()
 zoro_telemetry.init_telemetry()
 
 # Session id for episode rows — lets us collate a single conversation later.
@@ -1866,7 +1867,7 @@ class Zoro(Agent):
         Args:
             name: App name. Partial / fuzzy match is fine.
         """
-        return await self.open_app(context, name)
+        return await self.open_app(context, app_name=name)  # pyright: ignore[reportCallIssue]
 
     @function_tool()
     @_logged
@@ -2117,7 +2118,7 @@ class Zoro(Agent):
         self, context: RunContext, task: str, role: str = ""
     ) -> str:
         """Hand an engineering, coding, or editing task off to Zoro's Azure OpenAI Autonomous Engineer."""
-        return await self.ask_claude_code(context, task, role)
+        return await self.ask_claude_code(context, task, role)  # pyright: ignore[reportArgumentType]
 
     @function_tool()
     @_logged
@@ -3075,7 +3076,7 @@ def _spotify_error(exc: Exception) -> str:
         spotify_exception = ()
 
     if isinstance(exc, spotify_exception):
-        status = exc.http_status
+        status = getattr(exc, "http_status", None)
         reason = (getattr(exc, "reason", "") or "").upper()
         msg = str(exc)
         if status == 403:
@@ -3163,7 +3164,7 @@ async def entrypoint(ctx: JobContext) -> None:
     azure_key = os.environ.get("AZURE_OPENAI_API_KEY")
     azure_deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-6-sol")
     azure_speech_region = os.environ.get("AZURE_SPEECH_REGION", "eastus2")
-    azure_speech_voice = os.environ.get("AZURE_SPEECH_VOICE", "en-GB-SoniaNeural")
+    azure_speech_voice = os.environ.get("AZURE_SPEECH_VOICE", "en-GB-AdaMultilingualNeural")
 
     if azure_endpoint and azure_key:
         active_llm = openai.LLM.with_azure(
@@ -3187,32 +3188,19 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         llm_label = "anthropic(sonnet-4-5)"
 
-    # Audio Pipeline: 100% Microsoft Azure AI Speech (zero extra third-party subscriptions)
-    # Falls back to Deepgram/Cartesia only if Azure speech key is not available.
-    if azure_key:
-        active_stt = azure.STT(
-            language="en-US",
-            speech_key=azure_key,
-            speech_region=azure_speech_region,
-        )
-        active_tts = azure.TTS(
-            voice=azure_speech_voice,
-            speech_key=azure_key,
-            speech_region=azure_speech_region,
-        )
-        stt_label = f"azure-speech-stt({azure_speech_region})"
-        tts_label = f"azure-neural-tts({azure_speech_voice})"
-    else:
-        active_stt = deepgram.STT(
-            model="nova-3", language="en", api_key=os.environ.get("DEEPGRAM_API_KEY", "")
-        )
-        active_tts = cartesia.TTS(
-            model="sonic-2",
-            voice="dc30854e-e398-4579-9dc8-16f6cb2c19b9",
-            api_key=os.environ.get("CARTESIA_API_KEY", ""),
-        )
-        stt_label = "deepgram(nova-3)"
-        tts_label = "cartesia(sonic-2/Victoria)"
+    # Audio Pipeline: 100% Microsoft Azure AI Speech (Deepgram & Cartesia eradicated)
+    active_stt = azure.STT(
+        language="en-US",
+        speech_key=azure_key or "",
+        speech_region=azure_speech_region,
+    )
+    active_tts = azure.TTS(
+        voice=azure_speech_voice,
+        speech_key=azure_key,
+        speech_region=azure_speech_region,
+    )
+    stt_label = f"azure-speech-stt({azure_speech_region})"
+    tts_label = f"azure-neural-tts({azure_speech_voice})"
 
     session = AgentSession(
         stt=active_stt,
@@ -3286,7 +3274,9 @@ async def entrypoint(ctx: JobContext) -> None:
         ))
 
     zoro_telemetry.track_event('zoro_session_start', {'room': ctx.room.name, 'llm': llm_label, 'session_id': _SESSION_ID})
-    await session.start(agent=Zoro(instructions), room=ctx.room)
+    agent = Zoro(instructions)
+    zoro_schema_cache.warm_cache_for_agent(agent)
+    await session.start(agent=agent, room=ctx.room)
 
     @ctx.room.on("data_received")
     def _on_room_data(dp) -> None:

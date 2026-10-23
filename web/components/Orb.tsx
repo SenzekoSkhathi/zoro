@@ -639,6 +639,7 @@ export interface AudioBands {
 export function Orb({
   mode = "idle",
   energy,
+  bands,
   accent,
   docked = false,
   size = 92,
@@ -650,6 +651,8 @@ export function Orb({
 }: {
   mode?: OrbMode;
   energy?: number;
+  /** Live audio frequency spectrum bands (e.g. 5-band array from useMultibandTrackVolume) */
+  bands?: number[];
   accent?: string;
   docked?: boolean;
   size?: number;
@@ -668,19 +671,96 @@ export function Orb({
   const clampedExternalEnergy =
     energy !== undefined ? Math.min(1, Math.max(0, energy)) : undefined;
 
+  const targetBandsRef = useRef<{
+    bass: number;
+    mid: number;
+    treble: number;
+    energy: number;
+    tone: number;
+    hasBands: boolean;
+  }>({
+    bass: 0,
+    mid: 0,
+    treble: 0,
+    energy: 0,
+    tone: speechTone,
+    hasBands: false,
+  });
+
+  // Calculate target frequency metrics whenever bands, energy, or speechTone change
   useEffect(() => {
+    if (bands && bands.length > 0) {
+      let b = 0;
+      let m = 0;
+      let t = 0;
+
+      if (bands.length >= 5) {
+        // 5-band spectrum from LiveKit useMultibandTrackVolume:
+        // bands[0]: Sub-bass (deep chest resonance / warmth)
+        // bands[1]: Mid-bass (vocal fundamental)
+        // bands[2]: Low-mid (vocal formants F1/F2)
+        // bands[3]: High-mid (articulation / presence)
+        // bands[4]: Treble (fricatives / sibilance / air)
+        b = Math.min(1, Math.max(0, ((bands[0] ?? 0) * 0.45 + (bands[1] ?? 0) * 0.55) * 3.4));
+        m = Math.min(1, Math.max(0, ((bands[2] ?? 0) * 0.60 + (bands[3] ?? 0) * 0.40) * 3.2));
+        t = Math.min(1, Math.max(0, (bands[4] ?? 0) * 3.8));
+      } else if (bands.length >= 3) {
+        b = Math.min(1, Math.max(0, (bands[0] ?? 0) * 3.4));
+        m = Math.min(1, Math.max(0, (bands[1] ?? 0) * 3.2));
+        t = Math.min(1, Math.max(0, (bands[2] ?? 0) * 3.8));
+      } else {
+        b = Math.min(1, Math.max(0, (bands[0] ?? 0) * 3.2));
+        m = b * 0.85;
+        t = b * 0.72;
+      }
+
+      const calculatedEnergy = Math.min(
+        1,
+        Math.max(
+          clampedExternalEnergy ?? 0,
+          b * 0.38 + m * 0.44 + t * 0.18
+        )
+      );
+
+      const dynamicTone =
+        b + t > 0.04
+          ? Math.min(1, Math.max(0, t / (b + t)))
+          : speechTone;
+
+      targetBandsRef.current = {
+        bass: b,
+        mid: m,
+        treble: t,
+        energy: calculatedEnergy,
+        tone: dynamicTone,
+        hasBands: true,
+      };
+    } else if (clampedExternalEnergy !== undefined) {
+      const e = clampedExternalEnergy;
+      targetBandsRef.current = {
+        bass: e * 0.92,
+        mid: e * 0.85,
+        treble: e * 0.72,
+        energy: e,
+        tone: speechTone,
+        hasBands: false,
+      };
+    } else {
+      targetBandsRef.current = {
+        bass: 0,
+        mid: 0,
+        treble: 0,
+        energy: 0,
+        tone: speechTone,
+        hasBands: false,
+      };
+    }
+  }, [bands, clampedExternalEnergy, speechTone]);
+
+  useEffect(() => {
+    if (!listenToMic) return;
     const el = wrapperRef.current;
     if (!el) return;
-
-    // If an explicit external energy prop is supplied and mic listening is off, sync directly
-    if (!listenToMic) {
-      const e = clampedExternalEnergy ?? 0;
-      el.style.setProperty("--energy", e.toFixed(3));
-      el.style.setProperty("--bass", (e * 0.9).toFixed(3));
-      el.style.setProperty("--mid", (e * 0.85).toFixed(3));
-      el.style.setProperty("--treble", (e * 0.75).toFixed(3));
-      return;
-    }
 
     let cancelled = false;
     let audioCtx: AudioContext | null = null;
@@ -803,28 +883,6 @@ export function Orb({
     };
   }, [listenToMic, clampedExternalEnergy]);
 
-  // Also keep external energy responsive when mic hasn't overridden it
-  useEffect(() => {
-    if (clampedExternalEnergy !== undefined && wrapperRef.current) {
-      wrapperRef.current.style.setProperty(
-        "--energy",
-        clampedExternalEnergy.toFixed(3)
-      );
-      wrapperRef.current.style.setProperty(
-        "--bass",
-        (clampedExternalEnergy * 0.92).toFixed(3)
-      );
-      wrapperRef.current.style.setProperty(
-        "--mid",
-        (clampedExternalEnergy * 0.85).toFixed(3)
-      );
-      wrapperRef.current.style.setProperty(
-        "--treble",
-        (clampedExternalEnergy * 0.72).toFixed(3)
-      );
-    }
-  }, [clampedExternalEnergy]);
-
   // Smooth Siri-style internal petal flow & syllable undulation (outer sphere stays steady)
   useEffect(() => {
     const el = wrapperRef.current;
@@ -839,43 +897,86 @@ export function Orb({
     let angleB = 0;
     let phase = 0;
     let smoothCadence = 0;
+    let smoothEnergy = 0;
+    let smoothBass = 0;
+    let smoothMid = 0;
+    let smoothTreble = 0;
+    let smoothTone = clampedTone;
     let lastTime = performance.now();
 
     const step = (now: number) => {
       const dt = Math.min(0.05, (now - lastTime) / 1000);
       lastTime = now;
 
-      const liveEnergy =
-        parseFloat(el.style.getPropertyValue("--energy")) ||
-        clampedExternalEnergy ||
-        0;
-      const liveBass = parseFloat(el.style.getPropertyValue("--bass")) || 0;
-      const liveMid = parseFloat(el.style.getPropertyValue("--mid")) || 0;
-      const liveTreble = parseFloat(el.style.getPropertyValue("--treble")) || 0;
-
-      // In speaking mode, if no external audio energy is fed yet, generate a natural syllable flow
-      // synced to speechSpeed & speechTone; if audio/energy IS present, follow it directly.
+      const target = targetBandsRef.current;
       phase += dt * clampedSpeed;
-      let activeEnergy = liveEnergy;
-      let activeBass = liveBass;
-      let activeMid = liveMid;
-      let activeTreble = liveTreble;
 
-      if (mode === "speaking" && liveEnergy < 0.02 && clampedExternalEnergy === undefined) {
-        const syllableWave =
-          0.5 +
-          0.32 * Math.sin(phase * 5.4) +
-          0.18 * Math.sin(phase * 11.8 + 0.7);
-        const phraseEnvelope = Math.max(0.18, Math.sin(phase * 1.6) * 0.55 + 0.45);
-        activeEnergy = Math.min(1, syllableWave * phraseEnvelope * 0.75);
-        activeBass = activeEnergy * (1.1 - clampedTone * 0.5);
-        activeMid = activeEnergy * (0.75 + 0.25 * Math.sin(phase * 7.2));
-        activeTreble = activeEnergy * (0.5 + clampedTone * 0.6);
+      let activeEnergy = smoothEnergy;
+      let activeBass = smoothBass;
+      let activeMid = smoothMid;
+      let activeTreble = smoothTreble;
 
-        el.style.setProperty("--energy", activeEnergy.toFixed(3));
-        el.style.setProperty("--bass", Math.min(1, activeBass).toFixed(3));
-        el.style.setProperty("--mid", Math.min(1, activeMid).toFixed(3));
-        el.style.setProperty("--treble", Math.min(1, activeTreble).toFixed(3));
+      if (!listenToMic) {
+        if (target.hasBands || clampedExternalEnergy !== undefined) {
+          smoothEnergy += (target.energy - smoothEnergy) * 0.28;
+          smoothBass += (target.bass - smoothBass) * 0.30;
+          smoothMid += (target.mid - smoothMid) * 0.28;
+          smoothTreble += (target.treble - smoothTreble) * 0.32;
+          smoothTone += (target.tone - smoothTone) * 0.18;
+
+          activeEnergy = smoothEnergy;
+          activeBass = smoothBass;
+          activeMid = smoothMid;
+          activeTreble = smoothTreble;
+
+          el.style.setProperty("--energy", activeEnergy.toFixed(3));
+          el.style.setProperty("--bass", activeBass.toFixed(3));
+          el.style.setProperty("--mid", activeMid.toFixed(3));
+          el.style.setProperty("--treble", activeTreble.toFixed(3));
+        } else if (mode === "speaking" && smoothEnergy < 0.02) {
+          const syllableWave =
+            0.5 +
+            0.32 * Math.sin(phase * 5.4) +
+            0.18 * Math.sin(phase * 11.8 + 0.7);
+          const phraseEnvelope = Math.max(0.18, Math.sin(phase * 1.6) * 0.55 + 0.45);
+          activeEnergy = Math.min(1, syllableWave * phraseEnvelope * 0.75);
+          activeBass = activeEnergy * (1.1 - clampedTone * 0.5);
+          activeMid = activeEnergy * (0.75 + 0.25 * Math.sin(phase * 7.2));
+          activeTreble = activeEnergy * (0.5 + clampedTone * 0.6);
+
+          el.style.setProperty("--energy", activeEnergy.toFixed(3));
+          el.style.setProperty("--bass", Math.min(1, activeBass).toFixed(3));
+          el.style.setProperty("--mid", Math.min(1, activeMid).toFixed(3));
+          el.style.setProperty("--treble", Math.min(1, activeTreble).toFixed(3));
+        } else {
+          smoothEnergy += (0 - smoothEnergy) * 0.22;
+          smoothBass += (0 - smoothBass) * 0.22;
+          smoothMid += (0 - smoothMid) * 0.22;
+          smoothTreble += (0 - smoothTreble) * 0.22;
+          activeEnergy = smoothEnergy;
+          activeBass = smoothBass;
+          activeMid = smoothMid;
+          activeTreble = smoothTreble;
+
+          el.style.setProperty("--energy", activeEnergy.toFixed(3));
+          el.style.setProperty("--bass", activeBass.toFixed(3));
+          el.style.setProperty("--mid", activeMid.toFixed(3));
+          el.style.setProperty("--treble", activeTreble.toFixed(3));
+        }
+      } else {
+        activeEnergy = parseFloat(el.style.getPropertyValue("--energy")) || 0;
+        activeBass = parseFloat(el.style.getPropertyValue("--bass")) || 0;
+        activeMid = parseFloat(el.style.getPropertyValue("--mid")) || 0;
+        activeTreble = parseFloat(el.style.getPropertyValue("--treble")) || 0;
+      }
+
+      if (onBandsRef.current && !listenToMic) {
+        onBandsRef.current({
+          energy: activeEnergy,
+          bass: activeBass,
+          mid: activeMid,
+          treble: activeTreble,
+        });
       }
 
       smoothCadence += (activeEnergy - smoothCadence) * 0.22;
@@ -917,7 +1018,7 @@ export function Orb({
         activeBass + activeTreble > 0.05
           ? activeTreble / (activeBass + activeTreble)
           : clampedTone;
-      const effectiveTone = clampedTone * 0.6 + liveSpectralTone * 0.4;
+      const effectiveTone = clampedTone * 0.5 + liveSpectralTone * 0.5;
 
       el.style.setProperty("--flow-a", `${angleA.toFixed(2)}deg`);
       el.style.setProperty("--flow-b", `${angleB.toFixed(2)}deg`);
@@ -930,7 +1031,7 @@ export function Orb({
 
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [mode, speechSpeed, speechTone, clampedExternalEnergy]);
+  }, [mode, speechSpeed, speechTone, listenToMic, clampedExternalEnergy]);
 
   const style = {
     ...(accent ? { "--accent": accent } : {}),

@@ -34,6 +34,9 @@ param supabaseServiceKey string
 @secure()
 param zoroAccessPassword string
 
+@secure()
+param azurePostgresUrl string = ''
+
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: environmentName
 }
@@ -75,6 +78,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'zoro-access-password'
           value: zoroAccessPassword
+        }
+        {
+          name: 'azure-postgres-url'
+          value: azurePostgresUrl
         }
       ]
       registries: [
@@ -138,6 +145,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'ZORO_ACCESS_PASSWORD'
               secretRef: 'zoro-access-password'
+            }
+            {
+              name: 'AZURE_POSTGRES_URL'
+              secretRef: 'azure-postgres-url'
             }
           ]
         }

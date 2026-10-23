@@ -455,10 +455,11 @@ function ZoroConversation({
   }, [contentShown]);
 
   const zoroSpeaking = state === "speaking";
+  const activeBands = zoroSpeaking ? zoroBands : userBands;
   // Boost a little so normal speech visibly drives the orb.
   const energy = Math.min(
     1,
-    avg(zoroSpeaking ? zoroBands : userBands) * 3.2,
+    avg(activeBands) * 3.2,
   );
   const accent = zoroSpeaking ? ZORO_ACCENT : USER_ACCENT;
   const faceMode: OrbMode = zoroSpeaking
@@ -489,6 +490,7 @@ function ZoroConversation({
         <Orb
           mode={faceMode}
           energy={energy}
+          bands={activeBands}
           accent={accent}
           docked={contentShown && !isOverlay}
         />

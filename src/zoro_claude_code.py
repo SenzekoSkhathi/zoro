@@ -55,11 +55,10 @@ async def _has_changes() -> bool:
     return rc == 0 and bool(out.strip())
 
 
-async def _boot_check() -> tuple[bool, str]:
-    """Compile-check every .py under src/. Cheap, catches syntax breaks.
+async def _boot_check(branch: Optional[str] = None) -> tuple[bool, str]:
+    """Compile-check every .py under src/. If web/ touched, also build web/.
 
-    Not a full import test — some modules need env / network — but enough
-    to refuse a rewrite that doesn't parse.
+    Cheap, catches syntax breaks and TypeScript build errors.
     """
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "compileall", "-q", str(ZORO_ROOT / "src"),
@@ -68,8 +67,38 @@ async def _boot_check() -> tuple[bool, str]:
         stderr=asyncio.subprocess.STDOUT,
     )
     out, _ = await proc.communicate()
-    text = out.decode("utf-8", errors="replace").strip()
-    return (proc.returncode or 0) == 0, text
+    py_text = out.decode("utf-8", errors="replace").strip()
+    if (proc.returncode or 0) != 0:
+        return False, f"Python compile check failed: {py_text}"
+
+    # Check if changes touched web/
+    web_touched = False
+    if branch:
+        rc, diff_out = await _git("diff", "--name-only", f"main..{branch}")
+        if rc == 0:
+            for p in diff_out.splitlines():
+                norm = p.strip().replace("\\", "/")
+                if norm.startswith("web/") and not norm.startswith("web/.next"):
+                    web_touched = True
+                    break
+
+    if web_touched:
+        npm_bin = shutil.which("npm.cmd") or shutil.which("npm") or "npm"
+        try:
+            npm_proc = await asyncio.create_subprocess_exec(
+                npm_bin, "--prefix", "web", "run", "build",
+                cwd=str(ZORO_ROOT),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            npm_out, _ = await npm_proc.communicate()
+            if (npm_proc.returncode or 0) != 0:
+                err_text = npm_out.decode("utf-8", errors="replace").strip()
+                return False, f"Web frontend build failed: {err_text[:800]}"
+        except Exception as e:
+            return False, f"Web build execution error: {e}"
+
+    return True, "All boot checks passed cleanly."
 
 
 async def _rebuild_self_map() -> None:
@@ -130,15 +159,21 @@ def _search_in_files(work_dir: Path, query: str, directory: str = "src") -> str:
     if not target_dir.exists():
         return f"Error: directory {directory} does not exist."
     matches = []
-    for f in target_dir.rglob("*.py"):
+    code_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".css", ".json", ".sql", ".md"}
+    skip_dirs = {"node_modules", ".next", ".venv", "__pycache__", ".git", "dist", "build"}
+    for f in target_dir.rglob("*"):
+        if not f.is_file() or f.suffix.lower() not in code_extensions:
+            continue
+        if any(part in f.parts for part in skip_dirs):
+            continue
         try:
             text = f.read_text(encoding="utf-8", errors="replace")
             for idx, line in enumerate(text.splitlines(), 1):
                 if query.lower() in line.lower():
                     rel = f.relative_to(work_dir).as_posix()
                     matches.append(f"{rel}:{idx}: {line.strip()[:100]}")
-                    if len(matches) >= 30:
-                        return "\n".join(matches) + "\n...(matches capped at 30)"
+                    if len(matches) >= 50:
+                        return "\n".join(matches) + "\n...(matches capped at 50)"
         except Exception:
             continue
     return "\n".join(matches) if matches else f"No matches found for '{query}'."
@@ -160,7 +195,7 @@ def _execute_local_tool(work_dir: Path, name: str, args: dict) -> str:
             return f"Error: file {path_arg} does not exist."
         try:
             content = target_path.read_text(encoding="utf-8", errors="replace")
-            return content if len(content) <= 12000 else content[:12000] + "\n...(truncated)"
+            return content if len(content) <= 60000 else content[:60000] + "\n...(truncated)"
         except Exception as e:
             return f"Error reading {path_arg}: {e}"
 
@@ -219,10 +254,10 @@ def _execute_local_tool(work_dir: Path, name: str, args: dict) -> str:
                 cwd=str(work_dir),
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=180,
             )
             out = (proc.stdout or "") + (proc.stderr or "")
-            return out.strip()[:6000] or "(Command exited with code 0 and no output)"
+            return out.strip()[:12000] or "(Command exited with code 0 and no output)"
         except Exception as e:
             return f"Error executing command: {e}"
 
@@ -308,12 +343,16 @@ async def _run_azure_coder_streaming(
             "type": "function",
             "function": {
                 "name": "search_in_files",
-                "description": "Search code files for a string or identifier",
+                "description": "Search code files (.py, .ts, .tsx, .css, .json, .md) for a string or identifier",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string"},
-                        "directory": {"type": "string", "default": "src"},
+                        "directory": {
+                            "type": "string",
+                            "default": "src",
+                            "description": "Directory to search in (e.g. 'src', 'web', 'scripts', or '.' for all)",
+                        },
                     },
                     "required": ["query"],
                 },
@@ -323,7 +362,7 @@ async def _run_azure_coder_streaming(
             "type": "function",
             "function": {
                 "name": "run_command",
-                "description": "Execute a shell command inside the repository (e.g. git status, python test)",
+                "description": "Execute a shell command inside the repository (e.g. git status, python test, npm run build)",
                 "parameters": {
                     "type": "object",
                     "properties": {"command": {"type": "string"}},
@@ -333,23 +372,36 @@ async def _run_azure_coder_streaming(
         },
     ]
 
+    disallowed_lower = {d.lower() for d in disallowed}
+    tool_aliases = {
+        "read_file": ["read_file", "read"],
+        "write_file": ["write_file", "write"],
+        "edit_file": ["edit_file", "edit"],
+        "list_dir": ["list_dir", "glob", "list"],
+        "search_in_files": ["search_in_files", "grep", "search"],
+        "run_command": ["run_command", "bash"],
+    }
     tools = [
         t for t in all_tools
-        if t["function"]["name"] not in disallowed
+        if not any(alias.lower() in disallowed_lower for alias in tool_aliases.get(t["function"]["name"], [t["function"]["name"]]))
     ]
 
     self_map_path = work_dir / "src" / "SELF_MAP.md"
     self_map_text = ""
     if self_map_path.exists():
         try:
-            self_map_text = "\n\nRepository Architecture (SELF_MAP.md):\n" + self_map_path.read_text(encoding="utf-8")[:4000]
+            self_map_text = "\n\nRepository Architecture (SELF_MAP.md):\n" + self_map_path.read_text(encoding="utf-8")[:8000]
         except Exception:
             pass
 
     full_system = (
         system_prompt
         + "\n\nYou are Zoro's autonomous engineer running on Azure OpenAI. "
-        "Keep changes small, clean, robust, and well-targeted. "
+        "You have full authority and permissions across the ENTIRE repository: "
+        "both the Python backend (src/) AND the Next.js web frontend (web/), "
+        "as well as scripts/ and sub-agents. You can freely inspect, edit, create, and build files in any of these. "
+        "Never claim you are backend-only or lack frontend access. "
+        "Keep changes robust and well-targeted. "
         "Never touch protected files (src/zoro_safety.py, src/zoro_claude_code.py, src/zoro_prompt.py). "
         "When finished, reply with a short summary of the changes you made."
         + self_map_text
@@ -360,7 +412,7 @@ async def _run_azure_coder_streaming(
         {"role": "user", "content": task},
     ]
 
-    for turn in range(10):
+    for turn in range(30):
         try:
             loop = asyncio.get_running_loop()
             resp = await loop.run_in_executor(
@@ -370,7 +422,7 @@ async def _run_azure_coder_streaming(
                     messages=messages,
                     tools=tools if tools else None,
                     reasoning_effort="none",
-                    max_completion_tokens=800,
+                    max_completion_tokens=4096,
                 ),
             )
         except Exception as e:
@@ -419,7 +471,7 @@ async def _run_azure_coder_streaming(
                 "content": res,
             })
 
-    yield {"kind": "result", "text": "Reached turn limit.", "ok": True}
+    yield {"kind": "result", "text": "Reached turn limit (30 turns).", "ok": True}
 
 
 async def run_streaming(
@@ -641,7 +693,7 @@ async def run_streaming(
         }
         return
 
-    ok, log = await _boot_check()
+    ok, log = await _boot_check(branch=branch)
     if not ok:
         # Discard the branch entirely.
         await _git("reset", "--hard", "HEAD")

@@ -52,9 +52,11 @@ $livekitApiSecret = $envMap['LIVEKIT_API_SECRET']
 $supabaseUrl = if ($envMap['SUPABASE_URL']) { $envMap['SUPABASE_URL'] } else { "https://hhumjsjyktaivcmiypfy.supabase.co" }
 $supabaseServiceKey = $envMap['SUPABASE_SERVICE_KEY']
 $zoroAccessPassword = if ($envMap['ZORO_ACCESS_PASSWORD']) { $envMap['ZORO_ACCESS_PASSWORD'] } else { "local-dev-test-pw" }
+$azurePostgresUrl = if ($envMap['AZURE_POSTGRES_URL']) { $envMap['AZURE_POSTGRES_URL'] } else { "" }
 
 Write-Host "  LiveKit URL: $livekitUrl" -ForegroundColor Green
 Write-Host "  Supabase URL: $supabaseUrl" -ForegroundColor Green
+Write-Host "  Azure Postgres: $(if ($azurePostgresUrl) { 'Configured' } else { 'Not Set' })" -ForegroundColor Green
 
 # 3. Deploy Bicep template
 Write-Host "`n[3/3] Deploying 'zoro-web' Container App to Azure Container Apps..." -ForegroundColor Yellow
@@ -73,6 +75,7 @@ $deploymentResult = az deployment group create `
         supabaseUrl=$supabaseUrl `
         supabaseServiceKey=$supabaseServiceKey `
         zoroAccessPassword=$zoroAccessPassword `
+        azurePostgresUrl=$azurePostgresUrl `
     --output json | ConvertFrom-Json
 
 if ($LASTEXITCODE -ne 0) {

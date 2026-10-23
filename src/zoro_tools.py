@@ -596,9 +596,22 @@ def _press(vk: int, repeat: int = 1) -> None:
         user32.keybd_event(vk, 0, 2, 0)  # KEYEVENTF_KEYUP
 
 
+def is_cloud_mode() -> bool:
+    """Return True if running in cloud (Azure Container Apps / Linux) or forced via env."""
+    import os
+    import sys
+    if os.environ.get("ZORO_FORCE_RELAY") == "1":
+        return True
+    return os.environ.get("ZORO_CLOUD") == "1" or sys.platform != "win32"
+
+
 def media_key(action: str, repeat: int = 1) -> None:
     if action not in _VK:
         raise ValueError(f"unknown media action: {action}")
+    if is_cloud_mode():
+        import zoro_screen_relay
+        zoro_screen_relay.request_host_command("media_key", {"action": action, "repeat": repeat}, timeout=10.0)
+        return
     _press(_VK[action], repeat)
 
 
@@ -612,13 +625,8 @@ def capture_screen_b64(max_edge: int = 1568) -> tuple[str, str]:
     encrypted Azure Redis screen relay. When running locally on Windows, captures directly."""
     import base64
     import io
-    import os
-    import sys
 
-    is_windows = sys.platform == "win32"
-    is_cloud = os.environ.get("ZORO_CLOUD") == "1" or not is_windows
-
-    if is_cloud:
+    if is_cloud_mode():
         try:
             import zoro_screen_relay
             return zoro_screen_relay.request_screen_from_relay(max_edge=max_edge)
@@ -646,7 +654,7 @@ def capture_screen_b64(max_edge: int = 1568) -> tuple[str, str]:
         w, h = img.size
         scale = min(1.0, max_edge / float(max(w, h)))
         if scale < 1.0:
-            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+            img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
         return base64.b64encode(buf.getvalue()).decode("ascii"), "image/png"
@@ -736,7 +744,7 @@ def _vision_answer(
             }
         ],
     )
-    parts = [b.text for b in msg.content if getattr(b, "type", "") == "text"]
+    parts = [getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text"]
     return " ".join(parts).strip() or "I couldn't make sense of the screen."
 
 
@@ -785,6 +793,10 @@ _HOTKEYS = {
 
 
 def type_text(text: str) -> None:
+    if is_cloud_mode():
+        import zoro_screen_relay
+        zoro_screen_relay.request_host_command("type_text", {"text": text}, timeout=10.0)
+        return
     import pyautogui
 
     pyautogui.write(text, interval=0.01)
@@ -792,10 +804,14 @@ def type_text(text: str) -> None:
 
 def press_keys(keys: list[str]) -> None:
     """Press a key combo, e.g. ['ctrl','s'] or ['enter']."""
-    import pyautogui
-
     if not keys:
         raise ValueError("no keys given")
+    if is_cloud_mode():
+        import zoro_screen_relay
+        zoro_screen_relay.request_host_command("press_keys", {"keys": keys}, timeout=10.0)
+        return
+    import pyautogui
+
     if len(keys) == 1:
         pyautogui.press(keys[0])
     else:
@@ -804,6 +820,10 @@ def press_keys(keys: list[str]) -> None:
 
 def mouse_click(x: int | None = None, y: int | None = None,
                  button: str = "left") -> None:
+    if is_cloud_mode():
+        import zoro_screen_relay
+        zoro_screen_relay.request_host_command("mouse_click", {"x": x, "y": y, "button": button}, timeout=10.0)
+        return
     import pyautogui
 
     if x is not None and y is not None:
@@ -813,19 +833,31 @@ def mouse_click(x: int | None = None, y: int | None = None,
 
 
 def window_action(action: str) -> None:
-    import pyautogui
-
     combo = _HOTKEYS.get(action)
     if combo is None:
         raise ValueError(f"unknown window action: {action}")
+    if is_cloud_mode():
+        import zoro_screen_relay
+        zoro_screen_relay.request_host_command("manage_window", {"action": action}, timeout=10.0)
+        return
+    import pyautogui
+
     pyautogui.hotkey(*combo)
 
 
 def lock_screen() -> None:
+    if is_cloud_mode():
+        import zoro_screen_relay
+        zoro_screen_relay.request_host_command("lock_screen", {}, timeout=10.0)
+        return
     ctypes.windll.user32.LockWorkStation()
 
 
 def sleep_pc() -> None:
+    if is_cloud_mode():
+        import zoro_screen_relay
+        zoro_screen_relay.request_host_command("sleep_pc", {}, timeout=10.0)
+        return
     subprocess.Popen(
         ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"]
     )
@@ -874,6 +906,10 @@ def resolve_folder(target: str) -> Path:
 
 def open_folder(target: str) -> str:
     """Open a folder in File Explorer. Returns the resolved path."""
+    if is_cloud_mode():
+        import zoro_screen_relay
+        res = zoro_screen_relay.request_host_command("open_folder", {"target": target}, timeout=10.0)
+        return str(res.get("path", target))
     p = resolve_folder(target)
     if not p.exists():
         raise FileNotFoundError(f"no folder '{target}' ({p})")
@@ -883,6 +919,10 @@ def open_folder(target: str) -> str:
 
 def open_path(path: str) -> str:
     """Open a file or folder with its default application."""
+    if is_cloud_mode():
+        import zoro_screen_relay
+        res = zoro_screen_relay.request_host_command("open_path", {"path": path}, timeout=10.0)
+        return str(res.get("path", path))
     p = Path(path).expanduser()
     if not p.exists():
         raise FileNotFoundError(f"path does not exist: {p}")
@@ -892,6 +932,11 @@ def open_path(path: str) -> str:
 
 def list_folder(target: str, limit: int = 40) -> list[str]:
     """Names of entries in a folder (folders first), capped at `limit`."""
+    if is_cloud_mode():
+        import zoro_screen_relay
+        res = zoro_screen_relay.request_host_command("list_folder", {"target": target, "limit": limit}, timeout=10.0)
+        entries = res.get("entries")
+        return list(entries) if isinstance(entries, list) else []
     p = resolve_folder(target)
     if not p.is_dir():
         raise NotADirectoryError(f"not a folder: {p}")
@@ -907,6 +952,11 @@ def find_files(
     """Case-insensitive filename search. Searches Downloads/Documents/
     Desktop by default, or under `root` if given. Returns full paths,
     most-recently-modified first."""
+    if is_cloud_mode():
+        import zoro_screen_relay
+        res = zoro_screen_relay.request_host_command("find_files", {"query": query, "root": root, "limit": limit}, timeout=15.0)
+        files = res.get("files")
+        return list(files) if isinstance(files, list) else []
     q = query.strip().strip('"').lower()
     roots = [resolve_folder(root)] if root else list(_SEARCH_ROOTS)
     hits: list[tuple[float, str]] = []

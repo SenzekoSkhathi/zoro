@@ -68,12 +68,32 @@ def _section_agents() -> list[str]:
     return lines
 
 
+def _section_web() -> list[str]:
+    web_dir = ROOT / "web"
+    if not web_dir.exists():
+        return []
+    return [
+        "",
+        "## Frontend web dashboard & HUD (web/)",
+        "- `web/app/page.tsx` — Main HUD dashboard: LiveKit audio visualizer, Siri Orb, HUD panels, telemetry",
+        "- `web/components/Orb.tsx` — Reactive multi-band 3D/canvas Siri Orb with audio reactivity",
+        "- `web/components/InstrumentRail.tsx` — System telemetry & resource gauges (CPU, memory, latency)",
+        "- `web/components/Transcript.tsx` — Real-time speech transcript & conversation history",
+        "- `web/components/ToolTicker.tsx` — Active tool execution ticker and progress indicators",
+        "- `web/components/HudPanel.tsx` — Collapsible HUD information drawer",
+        "- `web/components/LoginGate.tsx` — Authentication & session gate for web HUD",
+        "- `web/app/api/token/route.ts` — LiveKit WebRTC access token generation API",
+        "- `web/app/api/session/route.ts` — Agent session dispatch & lifecycle control API",
+        "- `web/app/api/telemetry/route.ts` — PostgreSQL / App Insights telemetry ingestion API",
+        "- `web/app/api/login/route.ts` — Web dashboard password / credential verification",
+    ]
+
+
 def _section_other() -> list[str]:
     return [
         "",
         "## Other top-level directories",
         "- `services/whatsapp/` — Node bridge that connects WhatsApp Web to Zoro",
-        "- `web/` — Next.js dashboard / HUD that Zoro publishes display state to",
         "- `data/` — runtime state (logs, notes, config, reminders) — gitignored",
         "- `models/` — local model files (wake word, etc.) — gitignored",
     ]
@@ -83,9 +103,10 @@ def build() -> str:
     header = [
         "# Zoro self-map",
         "",
-        "This is your own source code. You are a Python voice assistant",
-        "whose code lives at `C:/Users/senze/zoro`. When the user",
-        "asks you to change, improve, or extend yourself, use the module",
+        "This is your own source code. You are an autonomous AI assistant and voice agent",
+        "whose repository lives at `C:/Users/senze/zoro`. Both the Python backend (`src/`)",
+        "and the Next.js web frontend (`web/`) belong entirely to your system. When the user",
+        "asks you to change, improve, or extend yourself or your web HUD, use the module",
         "list below to know which file to point your Azure Autonomous Engineer at via the",
         "`delegate_task` / `ask_claude_code` tool.",
         "",
@@ -93,6 +114,7 @@ def build() -> str:
     parts = (
         header
         + _section_src()
+        + _section_web()
         + _section_agents()
         + _section_scripts()
         + _section_other()

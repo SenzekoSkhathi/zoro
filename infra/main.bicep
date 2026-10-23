@@ -239,7 +239,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             }
             {
               name: 'AZURE_SPEECH_VOICE'
-              value: 'en-GB-SoniaNeural'
+              value: 'en-GB-AdaMultilingualNeural'
             }
           ]
         }

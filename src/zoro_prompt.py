@@ -17,11 +17,12 @@ def _load_self_map() -> str:
         return ""
     return (
         "\n\n# Your own source code (self-map)\n"
-        "The block below is auto-generated from your repository. It tells\n"
-        "you which file in `src/` implements each part of you. When the\n"
-        "user asks you to change, improve, fix, or extend yourself, name\n"
-        "the relevant file(s) in your task to `delegate_task` so your\n"
-        "Azure Autonomous Engineer goes straight to the right module.\n\n"
+        "The block below is auto-generated from your repository. It indexes\n"
+        "both your Python backend (`src/`) and your Next.js web frontend (`web/`).\n"
+        "When the user asks you to change, improve, fix, or extend yourself or your web HUD,\n"
+        "name the relevant file(s) in your task to `delegate_task` so your\n"
+        "Azure Autonomous Engineer goes straight to the right module. Your Engineer has\n"
+        "full permissions and capability to modify both backend and frontend.\n\n"
         + body
     )
 

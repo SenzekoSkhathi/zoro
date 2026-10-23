@@ -43,11 +43,17 @@ def _pwsh() -> str:
     )
 
 
-def run_powershell(command: str, timeout: int = 180) -> dict:
-    """Run a PowerShell command. Returns {stdout, stderr, exit_code}.
+def is_cloud() -> bool:
+    """Return True if running in cloud (Azure Container Apps / Linux) or forced via env."""
+    import os
+    import sys
 
-    Raises subprocess.TimeoutExpired if it hangs past `timeout`.
-    """
+    if os.environ.get("ZORO_FORCE_RELAY") == "1":
+        return True
+    return os.environ.get("ZORO_CLOUD") == "1" or sys.platform != "win32"
+
+
+def _local_run_powershell(command: str, timeout: int = 180) -> dict:
     res = subprocess.run(
         [
             _pwsh(),
@@ -68,6 +74,26 @@ def run_powershell(command: str, timeout: int = 180) -> dict:
         "stderr": res.stderr or "",
         "exit_code": res.returncode,
     }
+
+
+def run_powershell(command: str, timeout: int = 180) -> dict:
+    """Run a PowerShell command. Returns {stdout, stderr, exit_code}.
+
+    Raises subprocess.TimeoutExpired if it hangs past `timeout`.
+    """
+    if is_cloud():
+        try:
+            import zoro_screen_relay
+            return zoro_screen_relay.request_host_command(
+                "powershell", {"command": command, "timeout": timeout}, timeout=float(timeout + 5)
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not execute PowerShell on Windows host via relay: {e}. "
+                "Ensure Zoro Host Relay or Zoro Supervisor is running on your Windows laptop."
+            ) from e
+
+    return _local_run_powershell(command, timeout)
 
 
 # --- App launching ---------------------------------------------------------
@@ -140,22 +166,34 @@ def find_app(name: str) -> Optional[dict]:
     return best if best_score >= 0.8 else None
 
 
+def _local_open_app(name: str) -> dict:
+    match = find_app(name)
+    if not match:
+        raise LookupError(f"no installed app matching {name!r}")
+    app_id = match["app_id"].replace('"', '`"')
+    cmd = f'Start-Process "shell:AppsFolder\\{app_id}"'
+    res = _local_run_powershell(cmd, timeout=10)
+    if res["exit_code"] != 0:
+        raise RuntimeError(
+            (res["stderr"] or "Start-Process failed").strip()
+        )
+    return match
+
+
 def open_app(name: str) -> dict:
     """Launch an installed Windows app by fuzzy name.
 
     Returns the matched {name, app_id}. Raises LookupError if no
     match.
     """
-    match = find_app(name)
-    if not match:
-        raise LookupError(f"no installed app matching {name!r}")
-    # shell:AppsFolder works for Win32, MSIX, and UWP apps alike.
-    # Backticks escape the backslash inside the double-quoted PS string.
-    app_id = match["app_id"].replace('"', '`"')
-    cmd = f'Start-Process "shell:AppsFolder\\{app_id}"'
-    res = run_powershell(cmd, timeout=10)
-    if res["exit_code"] != 0:
-        raise RuntimeError(
-            (res["stderr"] or "Start-Process failed").strip()
-        )
-    return match
+    if is_cloud():
+        try:
+            import zoro_screen_relay
+            return zoro_screen_relay.request_host_command("open_app", {"name": name}, timeout=15.0)
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not launch app '{name}' on Windows host via relay: {e}. "
+                "Ensure Zoro Host Relay or Zoro Supervisor is running on your Windows laptop."
+            ) from e
+
+    return _local_open_app(name)
