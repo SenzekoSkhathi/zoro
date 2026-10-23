@@ -46,7 +46,6 @@ from livekit.agents import (  # pyright: ignore[reportMissingImports]
 from livekit.plugins import (  # pyright: ignore[reportMissingImports]
     anthropic,
     azure,
-    elevenlabs,
     openai,
     silero,
 )
