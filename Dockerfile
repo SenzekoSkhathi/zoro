@@ -7,10 +7,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install system dependencies for audio decoding and networking
+# Install system dependencies for audio decoding, git operations, and networking
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
+    git \
     ffmpeg \
     libasound2 \
     libportaudio2 \

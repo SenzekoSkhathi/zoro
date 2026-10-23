@@ -27,6 +27,7 @@ httpx>=0.28
 websockets>=12
 numpy>=2.0
 Pillow>=10.0
+mss>=9.0.0
 
 # Integrations
 google-api-python-client>=2.0

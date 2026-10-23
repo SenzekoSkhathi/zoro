@@ -33,13 +33,21 @@ def _git_bin() -> str:
 
 
 async def _git(*args: str, cwd: Path = ZORO_ROOT) -> tuple[int, str]:
-    proc = await asyncio.create_subprocess_exec(
-        _git_bin(), *args, cwd=str(cwd),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-    out, _ = await proc.communicate()
-    return proc.returncode or 0, out.decode("utf-8", errors="replace").strip()
+    git = shutil.which("git")
+    if not git:
+        return 1, "git not available"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            git, *args, cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await proc.communicate()
+        return proc.returncode or 0, out.decode("utf-8", errors="replace").strip()
+    except FileNotFoundError:
+        return 1, "git binary not found"
+    except Exception as e:
+        return 1, f"git error: {e}"
 
 
 async def _has_changes() -> bool:
