@@ -32,10 +32,10 @@ RUN pip install --upgrade pip && \
 # Copy application source code
 COPY src/ ./src/
 COPY data/ ./data/
-COPY .gitignore ./
 
 # Initialize local git repository so branch isolation and git status checks are clean
 RUN git init && \
+    printf "data/*\n!data/.gitkeep\n*.log\n__pycache__/\n" > .gitignore && \
     git add -A && \
     git commit -m "init: zoro cloud core baseline"
 
