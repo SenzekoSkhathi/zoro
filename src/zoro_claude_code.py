@@ -50,8 +50,8 @@ async def _git(*args: str, cwd: Path = ZORO_ROOT) -> tuple[int, str]:
         return 1, f"git error: {e}"
 
 
-async def _has_changes() -> bool:
-    rc, out = await _git("status", "--porcelain", "--untracked-files=no")
+async def _has_changes(cwd: Path = ZORO_ROOT) -> bool:
+    rc, out = await _git("status", "--porcelain", cwd=cwd)
     return rc == 0 and bool(out.strip())
 
 
@@ -637,14 +637,14 @@ async def run_streaming(
         return
 
     # Self-mod cleanup: boot-check → auto-merge or rollback.
-    if not await _has_changes():
+    if not await _has_changes(work_dir):
         # Claude may have already committed its own work, so check the
         # branch vs main rather than the working tree.
-        rc, ahead = await _git("rev-list", "--count", f"main..{branch}")
+        rc, ahead = await _git("rev-list", "--count", f"main..{branch}", cwd=work_dir)
         committed = rc == 0 and ahead.strip() not in ("", "0")
         if not committed:
-            await _git("checkout", "main")
-            await _git("branch", "-D", branch)
+            await _git("checkout", "main", cwd=work_dir)
+            await _git("branch", "-D", branch, cwd=work_dir)
             yield {
                 "kind": "merge",
                 "status": "no-changes",
@@ -654,9 +654,9 @@ async def run_streaming(
 
     # Commit anything still uncommitted so the diff check below sees
     # the full set of changes Claude made.
-    if await _has_changes():
-        await _git("add", "-A")
-        await _git("commit", "-m", f"zoro self-mod (pre-check): {task[:64]}")
+    if await _has_changes(work_dir):
+        await _git("add", "-A", cwd=work_dir)
+        await _git("commit", "-m", f"zoro self-mod (pre-check): {task[:64]}", cwd=work_dir)
 
     touches_protected, hit = await _branch_touches_protected(branch)
     if touches_protected:
@@ -725,9 +725,20 @@ async def run_streaming(
         }
         return
     merged_branch = branch
-    await _git("branch", "-d", branch)
-    push_rc, push_out = await _git("push", "origin", "main")
-    push_note = " (push failed)" if push_rc != 0 else ""
+    await _git("branch", "-d", branch, cwd=work_dir)
+
+    # Configure git remote origin with GITHUB_TOKEN if available
+    gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if gh_token:
+        repo_url = f"https://x-access-token:{gh_token}@github.com/SenzekoSkhathi/zoro.git"
+        rc_remote, _ = await _git("remote", "get-url", "origin", cwd=work_dir)
+        if rc_remote != 0:
+            await _git("remote", "add", "origin", repo_url, cwd=work_dir)
+        else:
+            await _git("remote", "set-url", "origin", repo_url, cwd=work_dir)
+
+    push_rc, push_out = await _git("push", "origin", "main", cwd=work_dir)
+    push_note = f" (push failed: {push_out[:80]})" if push_rc != 0 else ""
     yield {
         "kind": "merge",
         "status": "merged",

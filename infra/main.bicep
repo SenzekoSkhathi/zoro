@@ -58,6 +58,9 @@ param youtubeApiKey string = ''
 @secure()
 param googleOauthClientSecret string = ''
 
+@secure()
+param githubToken string = ''
+
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: environmentName
 }
@@ -129,6 +132,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'google-oauth-secret'
           value: googleOauthClientSecret
+        }
+        {
+          name: 'github-token'
+          value: githubToken
         }
       ]
       registries: [
@@ -240,6 +247,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'AZURE_SPEECH_VOICE'
               value: 'en-GB-AdaMultilingualNeural'
+            }
+            {
+              name: 'GITHUB_TOKEN'
+              secretRef: 'github-token'
             }
           ]
         }

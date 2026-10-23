@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install system dependencies for audio decoding, git operations, and networking
+# Install system dependencies for audio decoding, git operations, networking, and Node.js LTS
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -16,6 +16,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     libportaudio2 \
     portaudio19-dev \
+    ca-certificates \
+    gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Configure git identity and safe directory
@@ -29,16 +33,22 @@ COPY requirements-server.txt .
 RUN pip install --upgrade pip && \
     pip install -r requirements-server.txt
 
-# Copy application source code
+# Install web dependencies so frontend builds and boot checks succeed
+COPY web/package.json web/package-lock.json* ./web/
+RUN cd web && npm install
+
+# Copy application source code (full repository context for autonomous engineering)
 COPY src/ ./src/
 COPY data/ ./data/
+COPY web/ ./web/
+COPY scripts/ ./scripts/
+COPY agents/ ./agents/
 
-# Initialize local git repository so branch isolation and git status checks are clean
+# Initialize local git repository so branch isolation, git diffs, and self-mod work cleanly
 RUN git init && \
-    printf "data/*\n!data/.gitkeep\n*.log\n__pycache__/\n" > .gitignore && \
+    printf "data/*\n!data/.gitkeep\n*.log\n__pycache__/\nweb/node_modules/\nweb/.next/\n" > .gitignore && \
     git add -A && \
     git commit -m "init: zoro cloud core baseline"
 
 # Default entrypoint: Run LiveKit worker agent
 CMD ["python", "src/zoro_agent.py", "start"]
-

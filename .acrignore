@@ -1,7 +1,5 @@
 desktop
 desktop/**
-web
-web/**
 models
 models/**
 .venv
@@ -14,6 +12,10 @@ models/**
 .claude/**
 workspace
 workspace/**
+web/node_modules
+web/node_modules/**
+web/.next
+web/.next/**
 *.log
 *.tmp
 .env*
@@ -21,4 +23,3 @@ data/*.log
 data/_tts_probe*
 data/browser_profile
 data/whatsapp-session
-

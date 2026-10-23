@@ -72,7 +72,8 @@ $deploymentArgs = @(
     "applicationinsightsConnectionString=$($envMap['APPLICATIONINSIGHTS_CONNECTION_STRING'])",
     "spotifyClientSecret=$($envMap['SPOTIFY_CLIENT_SECRET'])",
     "youtubeApiKey=$($envMap['YOUTUBE_API_KEY'])",
-    "googleOauthClientSecret=$($envMap['GOOGLE_OAUTH_CLIENT_SECRET'])"
+    "googleOauthClientSecret=$($envMap['GOOGLE_OAUTH_CLIENT_SECRET'])",
+    "githubToken=$($envMap['GITHUB_TOKEN'])"
 )
 
 az @deploymentArgs

@@ -12,8 +12,6 @@ __pycache__
 .claude/**
 desktop
 desktop/**
-web
-web/**
 models
 models/**
 services
@@ -22,8 +20,10 @@ workspace
 workspace/**
 target
 target/**
-node_modules
-node_modules/**
+web/node_modules
+web/node_modules/**
+web/.next
+web/.next/**
 *.tmp
 *.log
 .env
