@@ -54,15 +54,17 @@ list below to know which file to point your Azure Autonomous Engineer at via the
 
 ## Sub-agents (agents/)
 - `agents/agent_smith.md` — Agent Smith: Sub-agent author. Writes new role files under `agents/` when Zoro decides she needs a new specialist.
-- `agents/coder.md` — Coder: General-purpose code editor for the Zoro repository. Makes focused, well-scoped changes that pass the boot check.
+- `agents/coder.md` — Coder: Full-stack code editor for the Zoro repository. Makes focused, robust changes across backend and frontend that pass the boot check.
 - `agents/diagnostician.md` — Diagnostician: System troubleshooter for the Windows machine Zoro runs on. Runs PowerShell commands, inspects screen state, and iterates until the issue is resolved or clearly diagnosed.
 - `agents/researcher.md` — Researcher: Read-only research assistant. Investigates topics, reads source, searches the web, and reports findings in plain prose. Never writes files.
+- `agents/task_source_dispatcher.md` — Task Source Dispatcher: Reviews pending tasks, reads relevant Zoro source, and prepares one well-scoped engineering handoff.
 
 ## Scripts (scripts/)
 - `scripts/build_self_map.py`
 - `scripts/deploy_azure.ps1`
 - `scripts/deploy_to_azure.py`
 - `scripts/deploy_web.ps1`
+- `scripts/engineer_logs.py`
 - `scripts/google_auth.py`
 - `scripts/install_autostart.ps1`
 - `scripts/make_icon.py`
