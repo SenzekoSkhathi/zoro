@@ -41,6 +41,7 @@ RUN cd web && npm install
 COPY src/ ./src/
 COPY data/ ./data/
 COPY web/ ./web/
+COPY desktop/ ./desktop/
 COPY scripts/ ./scripts/
 COPY agents/ ./agents/
 

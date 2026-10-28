@@ -113,14 +113,12 @@ async def _rebuild_self_map() -> None:
     await proc.wait()
 
 
-# Files autonomous self-mod must never alter. The harness, the safety
-# layer, and Zoro's identity. A diff that touches any of these is
-# rolled back regardless of boot-check outcome. The user can still
-# edit them by hand on main.
+# Files autonomous self-mod must never alter. The harness and the safety
+# layer. A diff that touches any of these is rolled back regardless of
+# boot-check outcome. The user can still edit them by hand on main.
 _PROTECTED_PATHS = frozenset({
     "src/zoro_safety.py",
     "src/zoro_claude_code.py",
-    "src/zoro_prompt.py",
 })
 
 
@@ -159,8 +157,8 @@ def _search_in_files(work_dir: Path, query: str, directory: str = "src") -> str:
     if not target_dir.exists():
         return f"Error: directory {directory} does not exist."
     matches = []
-    code_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".css", ".json", ".sql", ".md"}
-    skip_dirs = {"node_modules", ".next", ".venv", "__pycache__", ".git", "dist", "build"}
+    code_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".css", ".json", ".sql", ".md", ".rs", ".toml"}
+    skip_dirs = {"node_modules", ".next", ".venv", "__pycache__", ".git", "dist", "build", "target"}
     for f in target_dir.rglob("*"):
         if not f.is_file() or f.suffix.lower() not in code_extensions:
             continue
@@ -398,11 +396,12 @@ async def _run_azure_coder_streaming(
         system_prompt
         + "\n\nYou are Zoro's autonomous engineer running on Azure OpenAI. "
         "You have full authority and permissions across the ENTIRE repository: "
-        "both the Python backend (src/) AND the Next.js web frontend (web/), "
-        "as well as scripts/ and sub-agents. You can freely inspect, edit, create, and build files in any of these. "
+        "both the Python backend (src/), the Next.js web frontend (web/), "
+        "and the Tauri desktop shell (desktop/), as well as scripts/ and sub-agents. "
+        "You can freely inspect, edit, create, and build files in any of these. "
         "Never claim you are backend-only or lack frontend access. "
         "Keep changes robust and well-targeted. "
-        "Never touch protected files (src/zoro_safety.py, src/zoro_claude_code.py, src/zoro_prompt.py). "
+        "Never touch protected files (src/zoro_safety.py, src/zoro_claude_code.py). "
         "When finished, reply with a short summary of the changes you made."
         + self_map_text
     )
@@ -412,7 +411,7 @@ async def _run_azure_coder_streaming(
         {"role": "user", "content": task},
     ]
 
-    for turn in range(30):
+    for turn in range(45):
         if turn > 0:
             await asyncio.sleep(1.2)
 
@@ -486,7 +485,7 @@ async def _run_azure_coder_streaming(
                 "content": res,
             })
 
-    yield {"kind": "result", "text": "Reached turn limit (30 turns).", "ok": True}
+    yield {"kind": "result", "text": "Reached turn limit (45 turns).", "ok": True}
 
 
 async def run_streaming(

@@ -17,5 +17,5 @@ Behaviour:
   - If you modify `web/`: verify with `npm --prefix web run build`.
   If a change fails either boot check, the branch is rolled back. Run the verification yourself before finishing to ensure a clean merge.
 - Style: match the existing code style. No new comments unless the WHY is non-obvious. No docstring rewrites unless behaviour changed.
-- Forbidden files (Zoro's safety boundary — DO NOT MODIFY): `src/zoro_safety.py`, `src/zoro_claude_code.py`, `src/zoro_prompt.py`. If the task requires touching one of these, stop and report that it needs Skhathi's explicit approval instead.
+- Forbidden files (Zoro's safety boundary — DO NOT MODIFY): `src/zoro_safety.py`, `src/zoro_claude_code.py`. If the task requires touching one of these, stop and report that it needs Skhathi's explicit approval instead.
 - Final reply: one short sentence naming what you changed (e.g. "Added a retry loop to check_email in zoro_google.py" or "Added multi-band reactivity to Orb.tsx in web/components/").

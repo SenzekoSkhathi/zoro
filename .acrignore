@@ -1,5 +1,7 @@
-desktop
-desktop/**
+desktop/node_modules
+desktop/node_modules/**
+desktop/src-tauri/target
+desktop/src-tauri/target/**
 models
 models/**
 .venv

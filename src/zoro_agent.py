@@ -261,7 +261,7 @@ def _summarise_claude_result(state: dict) -> str:
     raw = (state.get("result") or "").strip().replace("\n", " ")
     merge = state.get("merge") or ""
     if state.get("status") == "failed":
-        snippet = raw[:140] + ("…" if len(raw) > 140 else "")
+        snippet = raw[:180] + ("…" if len(raw) > 180 else "")
         return f"The engineering task couldn't finish: {snippet}" if snippet else (
             "The engineering task hit an error."
         )
@@ -270,9 +270,11 @@ def _summarise_claude_result(state: dict) -> str:
             "The autonomous change broke my boot check, so I rolled it back. "
             "Nothing was merged, Sir."
         )
+    snippet = raw[:240] + ("…" if len(raw) > 240 else "")
     if merge == "no-changes":
+        if snippet:
+            return snippet
         return "The autonomous engineering core ran but didn't change anything."
-    snippet = raw[:200] + ("…" if len(raw) > 200 else "")
     suffix = " Merged into main." if merge == "merged" else ""
     if snippet:
         return f"Task complete Sir. {snippet}{suffix}"

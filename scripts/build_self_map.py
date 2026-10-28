@@ -77,6 +77,8 @@ def _section_web() -> list[str]:
         "## Frontend web dashboard & HUD (web/)",
         "- `web/app/page.tsx` — Main HUD dashboard: LiveKit audio visualizer, Siri Orb, HUD panels, telemetry",
         "- `web/components/Orb.tsx` — Reactive multi-band 3D/canvas Siri Orb with audio reactivity",
+        "- `web/components/ZoroDisplay.tsx` — Multi-widget HUD display cards (search, weather, calendar, inbox, spotify, github, youtube, etc.)",
+        "- `web/components/WidgetLimit.tsx` — Shared widget limiter (1 big + 2 small max) and centre-screen WidgetStage grid",
         "- `web/components/InstrumentRail.tsx` — System telemetry & resource gauges (CPU, memory, latency)",
         "- `web/components/Transcript.tsx` — Real-time speech transcript & conversation history",
         "- `web/components/ToolTicker.tsx` — Active tool execution ticker and progress indicators",
@@ -86,6 +88,11 @@ def _section_web() -> list[str]:
         "- `web/app/api/session/route.ts` — Agent session dispatch & lifecycle control API",
         "- `web/app/api/telemetry/route.ts` — PostgreSQL / App Insights telemetry ingestion API",
         "- `web/app/api/login/route.ts` — Web dashboard password / credential verification",
+        "",
+        "## Native Tauri desktop shell (desktop/)",
+        "- `desktop/src-tauri/src/main.rs` — Windows native overlay window, tray icon, Alt+F5 pin, Win32 Orb drag, work-area overlay & click-through",
+        "- `desktop/src-tauri/tauri.conf.json` — Tauri v2 window configuration",
+        "- `desktop/src-tauri/capabilities/default.json` — Remote URL ACL capabilities for the hosted web UI",
     ]
 
 
