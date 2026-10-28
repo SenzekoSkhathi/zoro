@@ -1,51 +1,291 @@
 // Zoro desktop shell.
 //
-// A thin native window around the hosted Zoro UI (loaded from Vercel, so UI
-// updates arrive automatically). Adds the desktop-native behaviour the
-// browser can't: a system-tray presence, launch-at-login, close-to-tray,
-// and "wake-summon" — when the local wake service hears "Hey Zoro" it
-// re-launches this exe, and the single-instance handler surfaces the window
-// instead of opening a second copy.
+// A thin native window around the hosted Zoro UI. Adds the desktop-native
+// behaviour the browser can't: a system-tray presence, launch-at-login,
+// close-to-tray, global Alt+F5 Always-on-Top pinning, native OS cursor-tracked
+// dragging, and "wake-summon".
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, WebviewWindow, WindowEvent,
 };
 
-#[tauri::command]
-fn start_drag(window: WebviewWindow) -> Result<(), String> {
-    window.start_dragging().map_err(|e| e.to_string())
+static IS_DRAGGING: AtomicBool = AtomicBool::new(false);
+static IS_PINNED: AtomicBool = AtomicBool::new(false);
+static LAST_PIN_TOGGLE_MS: AtomicU64 = AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[cfg(target_os = "windows")]
+mod win32 {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    #[derive(Copy, Clone, Default)]
+    pub struct Point {
+        pub x: i32,
+        pub y: i32,
+    }
+
+    pub const VK_LBUTTON: i32 = 0x01;
+    pub const VK_ESCAPE: i32 = 0x1B;
+    pub const VK_MENU: i32 = 0x12; // Alt key
+    pub const VK_F4: i32 = 0x73;
+    pub const VK_F5: i32 = 0x74;
+
+    pub const HWND_TOP: isize = 0;
+    pub const HWND_BOTTOM: isize = 1;
+    pub const HWND_TOPMOST: isize = -1;
+    pub const HWND_NOTOPMOST: isize = -2;
+
+    pub const SWP_NOSIZE: u32 = 0x0001;
+    pub const SWP_NOMOVE: u32 = 0x0002;
+    pub const SWP_NOACTIVATE: u32 = 0x0010;
+    pub const SWP_SHOWWINDOW: u32 = 0x0040;
+
+    #[link(name = "user32")]
+    extern "system" {
+        pub fn GetCursorPos(lp_point: *mut Point) -> i32;
+        pub fn GetAsyncKeyState(v_key: i32) -> i16;
+        pub fn SetWindowPos(
+            hwnd: *mut c_void,
+            hwnd_insert_after: isize,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            u_flags: u32,
+        ) -> i32;
+        pub fn GetForegroundWindow() -> *mut c_void;
+    }
+
+    pub fn is_key_down(vk: i32) -> bool {
+        unsafe { (GetAsyncKeyState(vk) as u16 & 0x8000) != 0 }
+    }
+
+    pub fn cursor_pos() -> Option<Point> {
+        let mut pt = Point::default();
+        if unsafe { GetCursorPos(&mut pt) } != 0 {
+            Some(pt)
+        } else {
+            None
+        }
+    }
+
+    pub fn apply_topmost(hwnd: *mut c_void, pinned: bool) {
+        unsafe {
+            if pinned {
+                SetWindowPos(
+                    hwnd,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE,
+                );
+            } else {
+                SetWindowPos(
+                    hwnd,
+                    HWND_NOTOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+                let fg = GetForegroundWindow();
+                if !fg.is_null() && fg != hwnd {
+                    // Drop behind active windows immediately so unpinning is visually instant
+                    SetWindowPos(
+                        hwnd,
+                        HWND_BOTTOM,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                } else {
+                    SetWindowPos(
+                        hwnd,
+                        HWND_TOP,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[tauri::command]
-fn toggle_always_on_top(window: WebviewWindow) -> Result<bool, String> {
-    let current = window.is_always_on_top().map_err(|e| e.to_string())?;
-    let next = !current;
-    window.set_always_on_top(next).map_err(|e| e.to_string())?;
+fn start_drag(window: WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        if IS_DRAGGING
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            // Already in a drag session -> second click drops the orb
+            IS_DRAGGING.store(false, Ordering::SeqCst);
+            return Ok(());
+        }
+
+        let start_cursor = match win32::cursor_pos() {
+            Some(pt) => pt,
+            None => {
+                IS_DRAGGING.store(false, Ordering::SeqCst);
+                return window.start_dragging().map_err(|e| e.to_string());
+            }
+        };
+        let start_win = match window.outer_position() {
+            Ok(pos) => pos,
+            Err(e) => {
+                IS_DRAGGING.store(false, Ordering::SeqCst);
+                return Err(e.to_string());
+            }
+        };
+
+        std::thread::spawn(move || {
+            // Brief 65ms window to detect whether the user is holding the mouse button
+            // down (hold-to-drag) OR released the second click of a double-click
+            // (float-and-move until next click).
+            for _ in 0..13 {
+                if !IS_DRAGGING.load(Ordering::SeqCst) {
+                    break;
+                }
+                if let Some(cur) = win32::cursor_pos() {
+                    let dx = cur.x - start_cursor.x;
+                    let dy = cur.y - start_cursor.y;
+                    if dx != 0 || dy != 0 {
+                        let _ = window.set_position(tauri::Position::Physical(
+                            tauri::PhysicalPosition {
+                                x: start_win.x + dx,
+                                y: start_win.y + dy,
+                            },
+                        ));
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+
+            let hold_mode = win32::is_key_down(win32::VK_LBUTTON);
+            let mut saw_release = !hold_mode;
+
+            while IS_DRAGGING.load(Ordering::SeqCst) {
+                if win32::is_key_down(win32::VK_ESCAPE) {
+                    break;
+                }
+
+                let lbutton = win32::is_key_down(win32::VK_LBUTTON);
+                if hold_mode {
+                    // Hold-and-drag: finish as soon as left mouse button is released
+                    if !lbutton {
+                        break;
+                    }
+                } else {
+                    // Double-click-and-move: follow cursor until the user clicks to drop
+                    if !lbutton {
+                        saw_release = true;
+                    } else if saw_release {
+                        // Wait for release of the drop click so it doesn't trigger a call
+                        while win32::is_key_down(win32::VK_LBUTTON) {
+                            std::thread::sleep(std::time::Duration::from_millis(8));
+                        }
+                        break;
+                    }
+                }
+
+                if let Some(cur) = win32::cursor_pos() {
+                    let dx = cur.x - start_cursor.x;
+                    let dy = cur.y - start_cursor.y;
+                    let _ = window.set_position(tauri::Position::Physical(
+                        tauri::PhysicalPosition {
+                            x: start_win.x + dx,
+                            y: start_win.y + dy,
+                        },
+                    ));
+                }
+
+                std::thread::sleep(std::time::Duration::from_millis(6));
+            }
+
+            IS_DRAGGING.store(false, Ordering::SeqCst);
+            let _ = window.eval("window.__zoroEndDrag && window.__zoroEndDrag();");
+        });
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        window.start_dragging().map_err(|e| e.to_string())
+    }
+}
+
+fn apply_pin_state(win: &WebviewWindow, next: bool) -> Result<bool, String> {
+    IS_PINNED.store(next, Ordering::SeqCst);
+    if next {
+        let _ = win.show();
+        let _ = win.unminimize();
+    }
+    let _ = win.set_always_on_top(next);
+    #[cfg(target_os = "windows")]
+    if let Ok(hwnd) = win.hwnd() {
+        win32::apply_topmost(hwnd.0 as *mut std::ffi::c_void, next);
+    }
+    let _ = win.eval(&format!(
+        "window.__zoroSetPinned && window.__zoroSetPinned({});",
+        next
+    ));
     Ok(next)
 }
 
 #[tauri::command]
-fn set_always_on_top(window: WebviewWindow, enabled: bool) -> Result<bool, String> {
-    window.set_always_on_top(enabled).map_err(|e| e.to_string())?;
-    Ok(enabled)
+fn toggle_always_on_top(window: WebviewWindow) -> Result<bool, String> {
+    let now = now_ms();
+    let prev = LAST_PIN_TOGGLE_MS.load(Ordering::SeqCst);
+    if now.saturating_sub(prev) < 350 {
+        return Ok(IS_PINNED.load(Ordering::SeqCst));
+    }
+    LAST_PIN_TOGGLE_MS.store(now, Ordering::SeqCst);
+    let next = !IS_PINNED.load(Ordering::SeqCst);
+    apply_pin_state(&window, next)
 }
 
 #[tauri::command]
-fn get_always_on_top(window: WebviewWindow) -> Result<bool, String> {
-    window.is_always_on_top().map_err(|e| e.to_string())
+fn set_always_on_top(window: WebviewWindow, enabled: bool) -> Result<bool, String> {
+    apply_pin_state(&window, enabled)
+}
+
+#[tauri::command]
+fn get_always_on_top(_window: WebviewWindow) -> Result<bool, String> {
+    Ok(IS_PINNED.load(Ordering::SeqCst))
 }
 
 #[tauri::command]
 fn set_window_size(window: WebviewWindow, width: f64, height: f64) -> Result<(), String> {
     if let Ok(Some(monitor)) = window.primary_monitor() {
         let scale = monitor.scale_factor();
-        window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-            width: (width * scale) as u32,
-            height: (height * scale) as u32,
-        })).map_err(|e| e.to_string())?;
+        window
+            .set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                width: (width * scale) as u32,
+                height: (height * scale) as u32,
+            }))
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -61,6 +301,12 @@ fn surface_main(app: &tauri::AppHandle) {
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
+        if IS_PINNED.load(Ordering::SeqCst) {
+            #[cfg(target_os = "windows")]
+            if let Ok(hwnd) = win.hwnd() {
+                win32::apply_topmost(hwnd.0 as *mut std::ffi::c_void, true);
+            }
+        }
     }
 }
 
@@ -74,82 +320,38 @@ fn surface_main_passive(app: &tauri::AppHandle) {
 
 /// Toggle Always-on-Top (Pin) state and sync with the webview UI.
 fn toggle_pin_state(app: &tauri::AppHandle) {
+    let now = now_ms();
+    let prev = LAST_PIN_TOGGLE_MS.load(Ordering::SeqCst);
+    if now.saturating_sub(prev) < 350 {
+        return;
+    }
+    LAST_PIN_TOGGLE_MS.store(now, Ordering::SeqCst);
     if let Some(win) = app.get_webview_window("main") {
-        if let Ok(cur) = win.is_always_on_top() {
-            let next = !cur;
-            let _ = win.set_always_on_top(next);
-            if next {
-                let _ = win.show();
-                let _ = win.unminimize();
-            }
-            let _ = win.eval(&format!(
-                "window.__zoroSetPinned && window.__zoroSetPinned({});",
-                next
-            ));
-        }
+        let next = !IS_PINNED.load(Ordering::SeqCst);
+        let _ = apply_pin_state(&win, next);
     }
 }
 
 #[cfg(target_os = "windows")]
 fn spawn_global_hotkey_listener(app: tauri::AppHandle) {
-    #[repr(C)]
-    struct Point {
-        x: i32,
-        y: i32,
-    }
-    #[repr(C)]
-    struct Msg {
-        hwnd: *mut std::ffi::c_void,
-        message: u32,
-        w_param: usize,
-        l_param: isize,
-        time: u32,
-        pt: Point,
-    }
-    #[link(name = "user32")]
-    extern "system" {
-        fn RegisterHotKey(
-            hwnd: *mut std::ffi::c_void,
-            id: i32,
-            fs_modifiers: u32,
-            vk: u32,
-        ) -> i32;
-        fn GetMessageW(
-            lp_msg: *mut Msg,
-            hwnd: *mut std::ffi::c_void,
-            w_msg_filter_min: u32,
-            w_msg_filter_max: u32,
-        ) -> i32;
-    }
+    std::thread::spawn(move || {
+        let mut prev_alt_f5 = false;
+        loop {
+            let alt_down = win32::is_key_down(win32::VK_MENU);
+            let f5_down = win32::is_key_down(win32::VK_F5);
+            let alt_f5 = alt_down && f5_down;
 
-    const MOD_ALT: u32 = 0x0001;
-    const MOD_NOREPEAT: u32 = 0x4000;
-    const VK_F5: u32 = 0x74;
-    const WM_HOTKEY: u32 = 0x0312;
-    const HOTKEY_PIN_ID: i32 = 1;
-
-    std::thread::spawn(move || unsafe {
-        if RegisterHotKey(
-            std::ptr::null_mut(),
-            HOTKEY_PIN_ID,
-            MOD_ALT | MOD_NOREPEAT,
-            VK_F5,
-        ) != 0
-        {
-            let mut msg: Msg = std::mem::zeroed();
-            while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
-                if msg.message == WM_HOTKEY && msg.w_param == HOTKEY_PIN_ID as usize {
-                    toggle_pin_state(&app);
-                }
+            if alt_f5 && !prev_alt_f5 {
+                toggle_pin_state(&app);
             }
+            prev_alt_f5 = alt_f5;
+
+            std::thread::sleep(std::time::Duration::from_millis(25));
         }
     });
 }
 
-/// Inject the wake trigger into the (remote) page. The hosted UI can't reach
-/// the local ws:// wake socket from an HTTPS origin (mixed content), so the
-/// native side bridges it: the page exposes window.__zoroWake(), and we call
-/// it here when the wake service relaunches us with --wake / --proactive.
+/// Inject the wake trigger into the (remote) page.
 fn trigger_wake(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.eval("window.__zoroWake && window.__zoroWake();");
@@ -162,12 +364,7 @@ fn argv_has_wake<I: IntoIterator<Item = String>>(argv: I) -> bool {
 
 fn main() {
     tauri::Builder::default()
-        // A second launch (e.g. the wake service running the exe on
-        // "Hey Zoro") routes here instead of starting a new process.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            // The wake service relaunches this exe on "Hey Zoro"; surface the
-            // window passively (no focus steal) if carrying --wake, and kick
-            // off the session.
             if argv_has_wake(argv) {
                 surface_main_passive(app);
                 trigger_wake(app);
@@ -188,20 +385,34 @@ fn main() {
             hide_window
         ])
         .setup(|app| {
-            // Enable launch-at-login (idempotent).
             {
                 use tauri_plugin_autostart::ManagerExt;
                 let _ = app.autolaunch().enable();
             }
 
-            // System tray with Show / Hide / Always On Top / Reset / Quit.
             let show_i = MenuItem::with_id(app, "show", "Show Zoro", true, None::<&str>)?;
-            let hide_i = MenuItem::with_id(app, "hide", "Hide Zoro (Alt+F4)", true, None::<&str>)?;
-            let top_i = MenuItem::with_id(app, "toggle_top", "Toggle Pin on Top (Alt+F5)", true, None::<&str>)?;
-            let reset_pos_i = MenuItem::with_id(app, "reset_pos", "Reset Position (Bottom-Right)", true, None::<&str>)?;
+            let hide_i =
+                MenuItem::with_id(app, "hide", "Hide Zoro (Alt+F4)", true, None::<&str>)?;
+            let top_i = MenuItem::with_id(
+                app,
+                "toggle_top",
+                "Toggle Pin on Top (Alt+F5)",
+                true,
+                None::<&str>,
+            )?;
+            let reset_pos_i = MenuItem::with_id(
+                app,
+                "reset_pos",
+                "Reset Position (Bottom-Right)",
+                true,
+                None::<&str>,
+            )?;
             let sep = PredefinedMenuItem::separator(app)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit Zoro", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &hide_i, &top_i, &reset_pos_i, &sep, &quit_i])?;
+            let menu = Menu::with_items(
+                app,
+                &[&show_i, &hide_i, &top_i, &reset_pos_i, &sep, &quit_i],
+            )?;
 
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -225,13 +436,21 @@ fn main() {
                                 let scale = monitor.scale_factor();
                                 let win_w = (240.0 * scale) as i32;
                                 let win_h = (240.0 * scale) as i32;
-                                let pos_x = (screen_size.width as i32) - win_w - (24.0 * scale) as i32;
-                                let pos_y = (screen_size.height as i32) - win_h - (60.0 * scale) as i32;
-                                let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }));
-                                let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                                    width: win_w as u32,
-                                    height: win_h as u32,
-                                }));
+                                let pos_x = (screen_size.width as i32)
+                                    - win_w
+                                    - (24.0 * scale) as i32;
+                                let pos_y = (screen_size.height as i32)
+                                    - win_h
+                                    - (60.0 * scale) as i32;
+                                let _ = win.set_position(tauri::Position::Physical(
+                                    tauri::PhysicalPosition { x: pos_x, y: pos_y },
+                                ));
+                                let _ = win.set_size(tauri::Size::Physical(
+                                    tauri::PhysicalSize {
+                                        width: win_w as u32,
+                                        height: win_h as u32,
+                                    },
+                                ));
                             }
                         }
                     }
@@ -250,17 +469,19 @@ fn main() {
                 })
                 .build(app)?;
 
-            // Anchor the floating window to the bottom-right of the primary display in compact Orb mode
             if let Some(win) = app.get_webview_window("main") {
                 if let Ok(Some(monitor)) = win.primary_monitor() {
                     let screen_size = monitor.size();
                     let scale = monitor.scale_factor();
-                    // Compact 240x240 initial box around the Orb — does not block screen buttons!
                     let win_w = (240.0 * scale) as i32;
                     let win_h = (240.0 * scale) as i32;
-                    let pos_x = (screen_size.width as i32) - win_w - (24.0 * scale) as i32;
-                    let pos_y = (screen_size.height as i32) - win_h - (60.0 * scale) as i32;
-                    let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }));
+                    let pos_x =
+                        (screen_size.width as i32) - win_w - (24.0 * scale) as i32;
+                    let pos_y =
+                        (screen_size.height as i32) - win_h - (60.0 * scale) as i32;
+                    let _ = win.set_position(tauri::Position::Physical(
+                        tauri::PhysicalPosition { x: pos_x, y: pos_y },
+                    ));
                     let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize {
                         width: win_w as u32,
                         height: win_h as u32,
@@ -274,9 +495,6 @@ fn main() {
                 }
             }
 
-            // Cold-start wake: if the wake service launched us from scratch
-            // with --wake, the remote page needs a moment to load and define
-            // window.__zoroWake before we call it.
             if argv_has_wake(std::env::args()) {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
@@ -290,8 +508,6 @@ fn main() {
 
             Ok(())
         })
-        // Closing the window hides it to the tray instead of quitting, so
-        // Zoro stays resident and wake-summon can re-surface her instantly.
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let _ = window.hide();

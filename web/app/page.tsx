@@ -38,10 +38,38 @@ async function callTauri<T = unknown>(
       invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<T>;
     };
   };
-  if (w.__TAURI_INTERNALS__?.invoke) {
+  const invoke = w.__TAURI_INTERNALS__?.invoke;
+  if (invoke) {
     try {
-      return await w.__TAURI_INTERNALS__.invoke(cmd, args);
+      return await invoke(cmd, args);
     } catch (e) {
+      // Fallback to built-in Tauri v2 core:window plugin commands if custom command ACL is unavailable
+      try {
+        if (cmd === "start_drag") {
+          return await invoke("plugin:window|start_dragging", { label: "main" });
+        }
+        if (cmd === "toggle_always_on_top") {
+          const cur = await invoke("plugin:window|is_always_on_top", {
+            label: "main",
+          });
+          const next = !cur;
+          await invoke("plugin:window|set_always_on_top", {
+            label: "main",
+            value: next,
+          });
+          return next as T;
+        }
+        if (cmd === "get_always_on_top") {
+          return await invoke("plugin:window|is_always_on_top", {
+            label: "main",
+          });
+        }
+        if (cmd === "hide_window") {
+          return await invoke("plugin:window|hide", { label: "main" });
+        }
+      } catch {
+        /* ignore fallback error */
+      }
       console.warn(`[Tauri] call "${cmd}" failed:`, e);
     }
   }

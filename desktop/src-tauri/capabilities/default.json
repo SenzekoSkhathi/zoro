@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core capability for the Zoro shell window. Grants IPC access to the hosted Zoro web overlay.",
+  "description": "Core capability for the Zoro shell window. Grants IPC and window control access to the hosted Zoro web overlay.",
   "windows": ["main"],
   "remote": {
     "urls": [
@@ -11,5 +11,22 @@
       "http://localhost:3000/*"
     ]
   },
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-is-always-on-top",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "allow-start-drag",
+    "allow-toggle-always-on-top",
+    "allow-set-always-on-top",
+    "allow-get-always-on-top",
+    "allow-set-window-size",
+    "allow-hide-window"
+  ]
 }
