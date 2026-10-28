@@ -30,6 +30,7 @@ export function useWakeService(onWake: () => void) {
   // Whether a call-pause is currently meant to be in effect. Held in a ref so
   // the reconnect handler can re-pause a new socket without re-running effects.
   const pausedRef = useRef(false);
+  const mutedRef = useRef(false);
   const refreshRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const onWakeRef = useRef(onWake);
   onWakeRef.current = onWake;
@@ -46,13 +47,17 @@ export function useWakeService(onWake: () => void) {
       ws.onopen = () => {
         setStatus("connected");
         // A call may already be live (this is a reconnect mid-call). Re-assert
-        // the pause lease on the new socket so the mic doesn't pop back to life.
+        // the pause lease or sticky mute on the new socket so the mic doesn't pop back to life.
+        if (mutedRef.current) {
+          ws.send(JSON.stringify({ cmd: "mute" }));
+        }
         if (pausedRef.current) {
           ws.send(JSON.stringify({ cmd: "pause" }));
         }
       };
       ws.onmessage = (ev) => {
         try {
+          if (mutedRef.current || pausedRef.current) return;
           const evt = JSON.parse(ev.data).event;
           // "proactive" is Zoro reaching out first; it connects exactly
           // like a wake word so the agent can deliver a queued directive.
@@ -78,7 +83,7 @@ export function useWakeService(onWake: () => void) {
     };
   }, []);
 
-  const send = useCallback((cmd: "pause" | "resume") => {
+  const send = useCallback((cmd: "pause" | "resume" | "mute" | "unmute") => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ cmd }));
@@ -107,5 +112,15 @@ export function useWakeService(onWake: () => void) {
     send("resume");
   }, [send]);
 
-  return { status, pause, resume };
+  const mute = useCallback(() => {
+    mutedRef.current = true;
+    send("mute");
+  }, [send]);
+
+  const unmute = useCallback(() => {
+    mutedRef.current = false;
+    send("unmute");
+  }, [send]);
+
+  return { status, pause, resume, mute, unmute };
 }

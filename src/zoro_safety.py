@@ -77,7 +77,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
         "calendar": True,
         "gmail": True,
         "reminders": True,
-        "ambient_nudges": True,
+        "ambient_nudges": False,
     },
     "calendar_heads_up_minutes": [10, 2],
     "gmail_account": "",
@@ -565,13 +565,28 @@ def is_pending_directive_fresh(max_age_seconds: int = 600) -> bool:
             if raw:
                 d = json.loads(raw)
                 return (time.time() - float(d.get("ts", 0))) < max_age_seconds
+            # Redis is reachable and authoritatively reports no pending
+            # directive (already consumed by cloud/local agent or expired).
+            # Clean up any leftover local mirror file so it cannot cause
+            # repeated proactive wake pokes.
+            try:
+                if PENDING_DIRECTIVE_FILE.exists():
+                    PENDING_DIRECTIVE_FILE.unlink()
+            except OSError:
+                pass
+            return False
         except Exception:
             pass
 
     try:
         if PENDING_DIRECTIVE_FILE.exists():
             d = json.loads(PENDING_DIRECTIVE_FILE.read_text(encoding="utf-8"))
-            return (time.time() - float(d.get("ts", 0))) < max_age_seconds
+            if (time.time() - float(d.get("ts", 0))) < max_age_seconds:
+                return True
+            try:
+                PENDING_DIRECTIVE_FILE.unlink()
+            except OSError:
+                pass
     except (OSError, ValueError):
         pass
     return False

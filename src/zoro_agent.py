@@ -1130,6 +1130,20 @@ class Zoro(Agent):
         "shut down", "power down", or otherwise clearly asks for full
         deactivation (not just to end the current call).
         """
+        try:
+            await asyncio.to_thread(zoro_safety.set_stand_down, True, None)
+        except Exception:
+            pass
+        try:
+            from websockets.sync.client import connect as _ws_connect
+
+            def _mute_local_wake() -> None:
+                with _ws_connect("ws://127.0.0.1:8765", open_timeout=1.5) as ws:
+                    ws.send('{"cmd": "mute"}')
+
+            await asyncio.to_thread(_mute_local_wake)
+        except Exception:
+            pass
         await publish_display("session", {"action": "deactivate"})
         return "Deactivating. I'll need a manual activation to come back."
 

@@ -217,16 +217,11 @@ def _watch_end_of_day(cfg: dict) -> list[tuple[int, str, str]]:
 
 def _cycle() -> None:
     if _pending_is_fresh():
-        # A directive is already queued and not yet consumed. The single
-        # poke at _fire() time is fire-and-forget: if no browser was
-        # connected/idle then (page in boot, in a call, or just closed),
-        # that wake notification was lost and — with the freshness gate
-        # below — NO new directive could be queued for 600s, so Zoro went
-        # silent for ~10 min and the message often expired unseen.
-        # Re-poke every cycle instead, so the directive is delivered the
-        # moment a session becomes available, while still not stacking a
-        # second directive on top of the unconsumed one.
-        _poke_wake()
+        # A directive is already queued and waiting to be consumed. Do NOT
+        # re-poke the wake service on every 45s poll cycle — doing so caused
+        # Zoro to repeatedly wake up and summon the desktop window up to 14
+        # times in 10 minutes when the user dismissed a call or when the
+        # directive was already handled on another worker.
         return
 
     cfg = zoro_safety.load_config()

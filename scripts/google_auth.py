@@ -48,6 +48,8 @@ class CallbackServer(http.server.HTTPServer):
 
 
 class CallbackHandler(http.server.BaseHTTPRequestHandler):
+    server: CallbackServer  # pyright: ignore[reportIncompatibleVariableOverride]
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
@@ -205,7 +207,7 @@ def main() -> None:
     cred_data = {
         "token": creds.token,
         "refresh_token": creds.refresh_token,
-        "token_uri": creds.token_uri,
+        "token_uri": getattr(creds, "token_uri", "https://oauth2.googleapis.com/token"),
         "client_id": creds.client_id,
         "client_secret": creds.client_secret,
         "scopes": creds.scopes,

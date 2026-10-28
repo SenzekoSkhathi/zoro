@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   LiveKitRoom,
   RoomAudioRenderer,
@@ -300,6 +300,11 @@ export default function Home() {
   // Briefly suppress wake-word re-activation right after a session ends,
   // so residual TTS audio bleeding into the mic can't bounce her back on.
   const [wakeGate, setWakeGate] = useState(false);
+  const [deactivated, setDeactivated] = useState(false);
+  const wakeGateRef = useRef(false);
+  const deactivatedRef = useRef(false);
+  wakeGateRef.current = wakeGate;
+  deactivatedRef.current = deactivated;
 
   const connect = useCallback(async () => {
     setPhase("connecting");
@@ -326,17 +331,20 @@ export default function Home() {
     status: wakeStatus,
     pause: wakePause,
     resume: wakeResume,
+    mute: wakeMute,
+    unmute: wakeUnmute,
   } = useWakeService(() => {
+    if (wakeGateRef.current || deactivatedRef.current) return;
     setPhase((p) => (p === "idle" ? "connecting" : p));
   });
 
   useEffect(() => {
     if (phase === "connecting" && !token) void connect();
-    if (phase === "active") wakePause();
+    if (phase === "connecting" || phase === "active" || wakeGate) wakePause();
     // Hold off on rearming the wake word while the post-session cooldown
-    // is active; the gate effect below resumes once it clears.
-    if (phase === "idle" && !wakeGate) wakeResume();
-  }, [phase, token, connect, wakePause, wakeResume, wakeGate]);
+    // or explicit deactivation is active.
+    if (phase === "idle" && !wakeGate && !deactivated) wakeResume();
+  }, [phase, token, connect, wakePause, wakeResume, wakeGate, deactivated]);
 
   // Native wake bridge: in the Tauri shell the page can't reach the local
   // ws:// wake socket (mixed content), so the Rust side calls this global
@@ -346,8 +354,10 @@ export default function Home() {
   useEffect(() => {
     if (authed !== true) return;
     const w = window as unknown as { __zoroWake?: () => void };
-    w.__zoroWake = () =>
+    w.__zoroWake = () => {
+      if (wakeGateRef.current || deactivatedRef.current) return;
       setPhase((p) => (p === "idle" ? "connecting" : p));
+    };
     return () => {
       delete w.__zoroWake;
     };
@@ -356,8 +366,10 @@ export default function Home() {
   const activate = useCallback(() => {
     setError(null);
     setToken(null);
+    setDeactivated(false);
+    wakeUnmute();
     setPhase("idle");
-  }, []);
+  }, [wakeUnmute]);
 
   const endCall = useCallback(() => {
     setToken(null);
@@ -366,20 +378,20 @@ export default function Home() {
     // Cooldown window: ignore wake events for a few seconds so any TTS
     // tail bleeding into the mic doesn't immediately bounce her back on.
     setWakeGate(true);
-    setTimeout(() => setWakeGate(false), 3000);
+    setTimeout(() => setWakeGate(false), 3500);
   }, []);
 
-  // End the session but stay in the listening lobby — the wake word stays
-  // armed so "Hey Zoro" brings her right back. (Always-listening model:
-  // deactivate no longer disarms; a true off is the tray "Quit"/pause.)
+  // Disarm wake word until the user explicitly clicks the Orb / Tap to Speak.
   const deactivate = useCallback(() => {
     setToken(null);
     setError(null);
     setPhase("idle");
     setContentShown(false);
+    setDeactivated(true);
+    wakeMute();
     setWakeGate(true);
-    setTimeout(() => setWakeGate(false), 3000);
-  }, []);
+    setTimeout(() => setWakeGate(false), 3500);
+  }, [wakeMute]);
 
   // In the Tauri shell wake arrives via the native bridge, not the (blocked)
   // ws:// socket, so treat the shell as wake-capable for the status readout.
@@ -423,6 +435,8 @@ export default function Home() {
             data-tauri-drag-region="true"
             onClick={() => {
               void primeAudio();
+              setDeactivated(false);
+              wakeUnmute();
               if (phase === "idle") setPhase("connecting");
             }}
             style={{ cursor: "pointer" }}
@@ -439,6 +453,8 @@ export default function Home() {
             className={styles.button}
             onClick={() => {
               void primeAudio();
+              setDeactivated(false);
+              wakeUnmute();
               if (phase === "idle") setPhase("connecting");
             }}
           >

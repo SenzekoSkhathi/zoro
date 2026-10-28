@@ -55,13 +55,20 @@ fn hide_window(window: WebviewWindow) -> Result<(), String> {
     window.hide().map_err(|e| e.to_string())
 }
 
-/// Reveal + focus the main window (used by the tray, and by the wake-summon
-/// single-instance callback).
+/// Reveal + focus the main window (used by the tray).
 fn surface_main(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
+    }
+}
+
+/// Reveal the main window without stealing focus from fullscreen apps/movies.
+fn surface_main_passive(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
     }
 }
 
@@ -85,10 +92,13 @@ fn main() {
         // "Hey Zoro") routes here instead of starting a new process.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // The wake service relaunches this exe on "Hey Zoro"; surface the
-            // window, and if it carried --wake, kick off the session too.
-            surface_main(app);
+            // window passively (no focus steal) if carrying --wake, and kick
+            // off the session.
             if argv_has_wake(argv) {
+                surface_main_passive(app);
                 trigger_wake(app);
+            } else {
+                surface_main(app);
             }
         }))
         .plugin(tauri_plugin_autostart::init(
