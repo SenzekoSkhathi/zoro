@@ -2793,10 +2793,17 @@ class Zoro(Agent):
             return f"I couldn't find any {kind} matching {query!r} on Spotify."
         except Exception as e:  # noqa: BLE001
             return _spotify_error(e)
+        if res["status"] != "playing":
+            return (
+                f"Spotify selected {res['name']}"
+                f"{' by ' + res['artists'] if res.get('artists') else ''} "
+                f"for {query!r}, but I can't confirm it's playing. "
+                f"{res.get('detail', 'Check the Spotify app/device.')}"
+            )
         await publish_now_playing(delay=0.7)
         if res.get("artists"):
-            return f"Playing {res['name']} by {res['artists']}."
-        return f"Playing {res['name']}."
+            return f"Playing {res['name']} by {res['artists']} (Spotify result for {query!r})."
+        return f"Playing {res['name']} (Spotify result for {query!r})."
 
     @function_tool()
     @_logged

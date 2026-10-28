@@ -12,6 +12,7 @@ and surface a clear message. Playback also needs an active Spotify device
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -152,19 +153,60 @@ def search_and_play(query: str, kind: str = "track") -> dict:
     device_id = _active_device_id(sp)
     if kind == "track":
         sp.start_playback(device_id=device_id, uris=[item["uri"]])
-        return {
-            "name": item["name"],
-            "artists": ", ".join(
-                a["name"] for a in item.get("artists", [])
-            ),
-        }
-    sp.start_playback(device_id=device_id, context_uri=item["uri"])
+    else:
+        sp.start_playback(device_id=device_id, context_uri=item["uri"])
     artists = (
         ", ".join(a["name"] for a in item.get("artists", []))
-        if kind == "album"
+        if kind in ("track", "album")
         else ""
     )
-    return {"name": item["name"], "artists": artists}
+    result = {"name": item["name"], "artists": artists, "status": "unverified",
+              "query": query, "device_id": device_id}
+    # An HTTP 204 only acknowledges the command. Even a matching first read can
+    # be the previous (or transient) state; require two separated active reads.
+    confirmed = False
+    last_issue = "Spotify has not reported playback yet."
+    for attempt in range(5):
+        if attempt:
+            time.sleep(0.8)
+        try:
+            cur = sp.current_playback()
+        except Exception as exc:
+            result["detail"] = f"Could not verify Spotify playback: {exc}. Check the Spotify app/device."
+            return result
+        if not cur or not cur.get("item"):
+            last_issue = "Spotify reports no active track. Open Spotify on the device and try again."
+            confirmed = False
+            continue
+        playing = cur["item"]
+        actual_device = (cur.get("device") or {}).get("id")
+        if device_id and actual_device != device_id:
+            last_issue = (f"Spotify reports playback on device {actual_device or 'unknown'}, "
+                          f"not the requested device {device_id}. Check Spotify Connect.")
+            confirmed = False
+            continue
+        if kind == "track":
+            matches = bool((item.get("id") and playing.get("id") == item["id"])
+                           or (item.get("uri") and playing.get("uri") == item["uri"]))
+        else:
+            matches = (cur.get("context") or {}).get("uri") == item["uri"]
+        if not matches:
+            last_issue = (f"Spotify reports {playing.get('name', 'another track')} "
+                          f"({playing.get('uri') or playing.get('id') or 'unknown ID'}) instead. "
+                          "Check the selected result and Spotify Connect device.")
+            confirmed = False
+            continue
+        if not cur.get("is_playing"):
+            last_issue = "Spotify reports the selected track paused. Check the Spotify app/device."
+            confirmed = False
+            continue
+        if confirmed:
+            result["status"] = "playing"
+            return result
+        confirmed = True
+        last_issue = "Playback appeared briefly, but sustained playback was not confirmed. Check the Spotify app/device."
+    result["detail"] = last_issue
+    return result
 
 
 def add_current_to_liked() -> Optional[str]:
