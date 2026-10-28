@@ -12,6 +12,7 @@ and surface a clear message. Playback also needs an active Spotify device
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -152,19 +153,45 @@ def search_and_play(query: str, kind: str = "track") -> dict:
     device_id = _active_device_id(sp)
     if kind == "track":
         sp.start_playback(device_id=device_id, uris=[item["uri"]])
-        return {
-            "name": item["name"],
-            "artists": ", ".join(
-                a["name"] for a in item.get("artists", [])
-            ),
-        }
-    sp.start_playback(device_id=device_id, context_uri=item["uri"])
+    else:
+        sp.start_playback(device_id=device_id, context_uri=item["uri"])
     artists = (
         ", ".join(a["name"] for a in item.get("artists", []))
-        if kind == "album"
+        if kind in ("track", "album")
         else ""
     )
-    return {"name": item["name"], "artists": artists}
+    result = {"name": item["name"], "artists": artists, "status": "pending"}
+    # The start endpoint acknowledges a request, not actual playback. Spotify's
+    # playback state can lag behind it, so check a few times before reporting.
+    for attempt in range(3):
+        if attempt:
+            time.sleep(0.7)
+        try:
+            cur = sp.current_playback()
+        except spotipy.SpotifyException:
+            raise
+        except Exception as exc:
+            result["detail"] = f"Could not verify Spotify playback: {exc}"
+            return result
+        if not cur or not cur.get("is_playing") or not cur.get("item"):
+            continue
+        playing = cur["item"]
+        if kind == "track":
+            matches = (
+                (item.get("id") and playing.get("id") == item["id"])
+                or (item.get("uri") and playing.get("uri") == item["uri"])
+            )
+        else:
+            context = cur.get("context") or {}
+            matches = context.get("uri") == item["uri"]
+        if matches:
+            result["status"] = "playing"
+            return result
+        result["status"] = "wrong_track"
+        result["detail"] = playing.get("name", "another track")
+    if result["status"] == "pending":
+        result["detail"] = "No matching active playback was confirmed."
+    return result
 
 
 def add_current_to_liked() -> Optional[str]:

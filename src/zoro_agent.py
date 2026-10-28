@@ -2793,6 +2793,16 @@ class Zoro(Agent):
             return f"I couldn't find any {kind} matching {query!r} on Spotify."
         except Exception as e:  # noqa: BLE001
             return _spotify_error(e)
+        if res["status"] != "playing":
+            if res["status"] == "wrong_track":
+                return (
+                    f"Spotify accepted the request for {res['name']}, but "
+                    f"{res['detail']} is playing instead."
+                )
+            return (
+                f"Spotify accepted the request for {res['name']}, but I can't "
+                f"confirm it's playing yet. {res.get('detail', '')}"
+            ).strip()
         await publish_now_playing(delay=0.7)
         if res.get("artists"):
             return f"Playing {res['name']} by {res['artists']}."
