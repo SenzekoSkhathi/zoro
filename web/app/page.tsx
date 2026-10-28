@@ -48,57 +48,6 @@ async function callTauri<T = unknown>(
   return null;
 }
 
-function OverlayControls({
-  alwaysOnTop,
-  onToggleAlwaysOnTop,
-  onHide,
-  onStartDrag,
-}: {
-  alwaysOnTop: boolean;
-  onToggleAlwaysOnTop: (e: React.MouseEvent) => void;
-  onHide: (e: React.MouseEvent) => void;
-  onStartDrag: (e: React.PointerEvent) => void;
-}) {
-  return (
-    <div
-      className={styles.overlayToolbar}
-      data-tauri-drag-region="true"
-      onPointerDown={onStartDrag}
-    >
-      <button
-        type="button"
-        className={styles.overlayToolBtn}
-        data-active={alwaysOnTop ? "true" : undefined}
-        onClick={onToggleAlwaysOnTop}
-        title={
-          alwaysOnTop
-            ? "Always on Top: ON (click to unpin)"
-            : "Always on Top: OFF (click to pin)"
-        }
-      >
-        {alwaysOnTop ? "📌 Pinned" : "🔓 Pin"}
-      </button>
-      <span
-        className={styles.overlayToolBtn}
-        data-tauri-drag-region="true"
-        onPointerDown={onStartDrag}
-        style={{ cursor: "grab" }}
-        title="Drag Zoro anywhere on screen"
-      >
-        ✥ Move
-      </span>
-      <button
-        type="button"
-        className={styles.overlayToolBtn}
-        onClick={onHide}
-        title="Hide to tray (wake word or tray icon brings Zoro back)"
-      >
-        ✕ Hide
-      </button>
-    </div>
-  );
-}
-
 function LiveClock() {
   // null until mounted so server and first client render match (the time
   // only exists client-side); avoids a hydration mismatch.
@@ -252,8 +201,7 @@ export default function Home() {
     }
   }, [inShell]);
 
-  const toggleAlwaysOnTop = useCallback(async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const toggleAlwaysOnTop = useCallback(async () => {
     const next = await callTauri<boolean>("toggle_always_on_top");
     if (typeof next === "boolean") {
       setAlwaysOnTop(next);
@@ -262,16 +210,39 @@ export default function Home() {
     }
   }, []);
 
-  const handleHideWindow = useCallback(async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleHideWindow = useCallback(async () => {
     await callTauri("hide_window");
   }, []);
 
-  const handleStartDrag = useCallback((e: React.PointerEvent) => {
-    if (e.button === 0) {
-      void callTauri("start_drag");
-    }
+  const handleStartDrag = useCallback(() => {
+    void callTauri("start_drag");
   }, []);
+
+  // Keyboard shortcuts & native pin state bridge:
+  //   Alt + F5 -> Toggle Always-on-Top (Pin)
+  //   Alt + F4 -> Hide window to tray
+  useEffect(() => {
+    const w = window as unknown as { __zoroSetPinned?: (val: boolean) => void };
+    w.__zoroSetPinned = (val: boolean) => {
+      setAlwaysOnTop(!!val);
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && e.key === "F5") {
+        e.preventDefault();
+        void toggleAlwaysOnTop();
+      } else if (e.altKey && e.key === "F4") {
+        e.preventDefault();
+        void handleHideWindow();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      delete w.__zoroSetPinned;
+    };
+  }, [toggleAlwaysOnTop, handleHideWindow]);
 
   const primeAudio = useCallback(() => {
     try {
@@ -423,27 +394,17 @@ export default function Home() {
 
       {phase !== "active" && (
         <div className={isOverlay ? styles.overlayContainer : undefined}>
-          {isOverlay && (
-            <OverlayControls
-              alwaysOnTop={alwaysOnTop}
-              onToggleAlwaysOnTop={toggleAlwaysOnTop}
-              onHide={handleHideWindow}
-              onStartDrag={handleStartDrag}
-            />
-          )}
-          <div
-            data-tauri-drag-region="true"
+          <Orb
+            mode={faceMode}
+            pinned={alwaysOnTop}
+            onStartDrag={handleStartDrag}
             onClick={() => {
               void primeAudio();
               setDeactivated(false);
               wakeUnmute();
               if (phase === "idle") setPhase("connecting");
             }}
-            style={{ cursor: "pointer" }}
-            title="Click to talk with Zoro"
-          >
-            <Orb mode={faceMode} />
-          </div>
+          />
         </div>
       )}
 
@@ -494,8 +455,6 @@ export default function Home() {
             onContentChange={setContentShown}
             isOverlay={isOverlay}
             alwaysOnTop={alwaysOnTop}
-            onToggleAlwaysOnTop={toggleAlwaysOnTop}
-            onHide={handleHideWindow}
             onStartDrag={handleStartDrag}
           />
         </LiveKitRoom>
@@ -521,8 +480,6 @@ function ZoroConversation({
   onContentChange,
   isOverlay = false,
   alwaysOnTop = false,
-  onToggleAlwaysOnTop,
-  onHide,
   onStartDrag,
 }: {
   onEnd: () => void;
@@ -530,9 +487,7 @@ function ZoroConversation({
   onContentChange: (shown: boolean) => void;
   isOverlay?: boolean;
   alwaysOnTop?: boolean;
-  onToggleAlwaysOnTop?: (e: React.MouseEvent) => void;
-  onHide?: (e: React.MouseEvent) => void;
-  onStartDrag?: (e: React.PointerEvent) => void;
+  onStartDrag?: () => void;
 }) {
   const { state, audioTrack } = useVoiceAssistant();
   const { microphoneTrack } = useLocalParticipant();
@@ -636,23 +591,15 @@ function ZoroConversation({
         <Transcript onActiveChange={setChatActive} />
       </WidgetLimitProvider>
       <div className={isOverlay ? styles.overlayContainer : undefined}>
-        {isOverlay && onToggleAlwaysOnTop && onHide && onStartDrag && (
-          <OverlayControls
-            alwaysOnTop={alwaysOnTop}
-            onToggleAlwaysOnTop={onToggleAlwaysOnTop}
-            onHide={onHide}
-            onStartDrag={onStartDrag}
-          />
-        )}
-        <div data-tauri-drag-region="true" style={{ cursor: "grab" }}>
-          <Orb
-            mode={faceMode}
-            energy={energy}
-            bands={activeBands}
-            accent={accent}
-            docked={contentShown && !isOverlay}
-          />
-        </div>
+        <Orb
+          mode={faceMode}
+          energy={energy}
+          bands={activeBands}
+          accent={accent}
+          docked={contentShown && !isOverlay}
+          pinned={alwaysOnTop}
+          onStartDrag={onStartDrag}
+        />
       </div>
       {!contentShown && !isOverlay && (
         <p className={styles.state}>{state ?? "connecting"}</p>

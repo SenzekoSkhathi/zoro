@@ -72,6 +72,80 @@ fn surface_main_passive(app: &tauri::AppHandle) {
     }
 }
 
+/// Toggle Always-on-Top (Pin) state and sync with the webview UI.
+fn toggle_pin_state(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        if let Ok(cur) = win.is_always_on_top() {
+            let next = !cur;
+            let _ = win.set_always_on_top(next);
+            if next {
+                let _ = win.show();
+                let _ = win.unminimize();
+            }
+            let _ = win.eval(&format!(
+                "window.__zoroSetPinned && window.__zoroSetPinned({});",
+                next
+            ));
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_global_hotkey_listener(app: tauri::AppHandle) {
+    #[repr(C)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+    #[repr(C)]
+    struct Msg {
+        hwnd: *mut std::ffi::c_void,
+        message: u32,
+        w_param: usize,
+        l_param: isize,
+        time: u32,
+        pt: Point,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn RegisterHotKey(
+            hwnd: *mut std::ffi::c_void,
+            id: i32,
+            fs_modifiers: u32,
+            vk: u32,
+        ) -> i32;
+        fn GetMessageW(
+            lp_msg: *mut Msg,
+            hwnd: *mut std::ffi::c_void,
+            w_msg_filter_min: u32,
+            w_msg_filter_max: u32,
+        ) -> i32;
+    }
+
+    const MOD_ALT: u32 = 0x0001;
+    const MOD_NOREPEAT: u32 = 0x4000;
+    const VK_F5: u32 = 0x74;
+    const WM_HOTKEY: u32 = 0x0312;
+    const HOTKEY_PIN_ID: i32 = 1;
+
+    std::thread::spawn(move || unsafe {
+        if RegisterHotKey(
+            std::ptr::null_mut(),
+            HOTKEY_PIN_ID,
+            MOD_ALT | MOD_NOREPEAT,
+            VK_F5,
+        ) != 0
+        {
+            let mut msg: Msg = std::mem::zeroed();
+            while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+                if msg.message == WM_HOTKEY && msg.w_param == HOTKEY_PIN_ID as usize {
+                    toggle_pin_state(&app);
+                }
+            }
+        }
+    });
+}
+
 /// Inject the wake trigger into the (remote) page. The hosted UI can't reach
 /// the local ws:// wake socket from an HTTPS origin (mixed content), so the
 /// native side bridges it: the page exposes window.__zoroWake(), and we call
@@ -122,8 +196,8 @@ fn main() {
 
             // System tray with Show / Hide / Always On Top / Reset / Quit.
             let show_i = MenuItem::with_id(app, "show", "Show Zoro", true, None::<&str>)?;
-            let hide_i = MenuItem::with_id(app, "hide", "Hide Zoro", true, None::<&str>)?;
-            let top_i = MenuItem::with_id(app, "toggle_top", "Toggle Always on Top", true, None::<&str>)?;
+            let hide_i = MenuItem::with_id(app, "hide", "Hide Zoro (Alt+F4)", true, None::<&str>)?;
+            let top_i = MenuItem::with_id(app, "toggle_top", "Toggle Pin on Top (Alt+F5)", true, None::<&str>)?;
             let reset_pos_i = MenuItem::with_id(app, "reset_pos", "Reset Position (Bottom-Right)", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit Zoro", true, None::<&str>)?;
@@ -142,11 +216,7 @@ fn main() {
                         }
                     }
                     "toggle_top" => {
-                        if let Some(win) = app.get_webview_window("main") {
-                            if let Ok(cur) = win.is_always_on_top() {
-                                let _ = win.set_always_on_top(!cur);
-                            }
-                        }
+                        toggle_pin_state(app);
                     }
                     "reset_pos" => {
                         if let Some(win) = app.get_webview_window("main") {
@@ -214,6 +284,9 @@ fn main() {
                     trigger_wake(&handle);
                 });
             }
+
+            #[cfg(target_os = "windows")]
+            spawn_global_hotkey_listener(app.handle().clone());
 
             Ok(())
         })
