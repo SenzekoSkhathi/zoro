@@ -243,15 +243,32 @@ def _app_exe() -> Path | None:
     return None
 
 
-def _summon_app(flag: str = "--wake") -> None:
-    """Surface the Zoro desktop app on wake and trigger a session when no
-    WebSocket client is already connected. Skipped by default when a webview
-    client is already connected over ws://127.0.0.1:8765 so we don't double-
-    trigger or steal focus from fullscreen applications.
-    """
-    if clients and os.environ.get("ZORO_ALWAYS_SUMMON_APP", "0") != "1":
+def _ensure_app_open() -> None:
+    """Ensure the Zoro desktop shell is running in the user's desktop session."""
+    if os.environ.get("ZORO_AUTO_SUMMON_APP", "1") == "0":
         return
-    if os.environ.get("ZORO_AUTO_SUMMON_APP", "0") != "1":
+    exe = _app_exe()
+    if exe is None:
+        return
+    try:
+        subprocess.Popen(
+            [str(exe), "--ensure"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print("[wake] ensured desktop app is open", flush=True)
+    except OSError as e:
+        print(f"[wake] ensure desktop app failed: {e}", flush=True)
+
+
+def _summon_app(flag: str = "--wake") -> None:
+    """Surface the Zoro desktop app on wake and trigger a session via its
+    single-instance handler (the hosted HTTPS UI in Tauri cannot connect to
+    local ws://127.0.0.1:8765 due to mixed-content rules, so it relies on
+    this native --wake bridge).
+    """
+    if os.environ.get("ZORO_AUTO_SUMMON_APP", "1") == "0":
         return
     exe = _app_exe()
     if exe is None:
@@ -260,7 +277,6 @@ def _summon_app(flag: str = "--wake") -> None:
     try:
         subprocess.Popen(
             [str(exe), flag],
-            creationflags=_NO_WINDOW,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -276,20 +292,21 @@ _CUSTOM = Path(__file__).resolve().parent.parent / "models" / "hey_zoro.onnx"
 WAKE_MODEL = os.environ.get("ZORO_WAKE_MODEL") or (
     str(_CUSTOM) if _CUSTOM.exists() else "hey_jarvis"
 )
-# Higher default threshold (0.78) + Silero VAD (0.65) + multi-frame patience (2)
-# prevents false triggers from casual conversation, movie dialogue, or music.
-THRESHOLD = float(os.environ.get("ZORO_WAKE_THRESHOLD", "0.78"))
-VAD_THRESHOLD = float(os.environ.get("ZORO_WAKE_VAD_THRESHOLD", "0.65"))
-PATIENCE_FRAMES = int(os.environ.get("ZORO_WAKE_PATIENCE", "2"))
-MIN_MIC_RMS = float(os.environ.get("ZORO_WAKE_MIN_RMS", "250.0"))
+# Responsive base threshold (0.50) when room/speakers are quiet, with dynamic
+# elevation (0.72) while PC speakers are actively playing media so movies/music
+# do not false-trigger while intentional "Hey Zoro" speech still wakes her.
+THRESHOLD = float(os.environ.get("ZORO_WAKE_THRESHOLD", "0.50"))
+MEDIA_WAKE_THRESHOLD = float(os.environ.get("ZORO_MEDIA_WAKE_THRESHOLD", "0.72"))
+PATIENCE_FRAMES = int(os.environ.get("ZORO_WAKE_PATIENCE", "1"))
+MIN_MIC_RMS = float(os.environ.get("ZORO_WAKE_MIN_RMS", "80.0"))
+MEDIA_MIN_MIC_RMS = float(os.environ.get("ZORO_MEDIA_MIN_RMS", "220.0"))
 COOLDOWN_S = 5.0            # ignore repeat detections within this window
 
-# Suppress wake-word detection while PC speakers are playing media (movies,
-# music, YouTube, etc.) + a short holdover tail after sound stops so speaker
-# bleed and room echo never wake Zoro uncalled.
+# Detect when PC speakers are playing media (movies, music, YouTube, etc.)
+# so proactive interrupts are suppressed and wake threshold adapts dynamically.
 SUPPRESS_DURING_MEDIA = os.environ.get("ZORO_WAKE_DURING_MEDIA", "0") != "1"
-MEDIA_PEAK_THRESHOLD = float(os.environ.get("ZORO_MEDIA_PEAK_THRESHOLD", "0.005"))
-MEDIA_HOLDOVER_S = float(os.environ.get("ZORO_MEDIA_HOLDOVER_S", "2.5"))
+MEDIA_PEAK_THRESHOLD = float(os.environ.get("ZORO_MEDIA_PEAK_THRESHOLD", "0.08"))
+MEDIA_HOLDOVER_S = float(os.environ.get("ZORO_MEDIA_HOLDOVER_S", "1.5"))
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -454,14 +471,7 @@ def _audio_loop(loop):
     global _media_active_until, _media_logged
     sd = _load_sounddevice()
     model_class = _load_wakeword_model()
-    try:
-        model = model_class(
-            wakeword_models=[WAKE_MODEL],
-            vad_threshold=VAD_THRESHOLD,
-            inference_framework="onnx",
-        )
-    except Exception:
-        model = model_class(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
+    model = model_class(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
 
     audio_meter = _SystemAudioMeter()
     last_fire = 0.0
@@ -471,8 +481,8 @@ def _audio_loop(loop):
 
     print(
         f"[wake] listening for '{WAKE_MODEL}' "
-        f"(threshold={THRESHOLD}, vad={VAD_THRESHOLD}, patience={PATIENCE_FRAMES}, "
-        f"media_guard={SUPPRESS_DURING_MEDIA})",
+        f"(threshold={THRESHOLD}, media_threshold={MEDIA_WAKE_THRESHOLD}, "
+        f"patience={PATIENCE_FRAMES}, media_guard={SUPPRESS_DURING_MEDIA})",
         flush=True,
     )
     with sd.InputStream(
@@ -487,18 +497,8 @@ def _audio_loop(loop):
                 sys_peak = audio_meter.peak()
                 if sys_peak >= MEDIA_PEAK_THRESHOLD:
                     _media_active_until = now_mono + MEDIA_HOLDOVER_S
-                    if not _media_logged:
-                        print(
-                            f"[wake] media playback active (peak={sys_peak:.3f}) — "
-                            "suppressing mic wake",
-                            flush=True,
-                        )
-                        _media_logged = True
-                elif _media_logged and now_mono >= _media_active_until:
-                    print("[wake] media playback ended — mic wake armed", flush=True)
-                    _media_logged = False
 
-            if _is_muted() or _is_media_playing():
+            if _is_muted():
                 if not was_suppressed:
                     model.reset()
                     consecutive_hits = 0
@@ -517,28 +517,36 @@ def _audio_loop(loop):
             rms_window.append(frame_rms)
             peak_rms = max(rms_window) if rms_window else frame_rms
 
+            # Always feed samples so openWakeWord's 1.5s feature buffer stays warm.
             scores = model.predict(samples)
             name, score = max(scores.items(), key=lambda kv: kv[1])
 
-            if score >= THRESHOLD and peak_rms >= MIN_MIC_RMS:
+            media_playing = _is_media_playing()
+            req_threshold = MEDIA_WAKE_THRESHOLD if media_playing else THRESHOLD
+            req_rms = MEDIA_MIN_MIC_RMS if media_playing else MIN_MIC_RMS
+            req_patience = max(PATIENCE_FRAMES, 2) if media_playing else PATIENCE_FRAMES
+
+            if score >= req_threshold and peak_rms >= req_rms:
                 consecutive_hits += 1
             else:
                 consecutive_hits = 0
 
             now = time.time()
-            if consecutive_hits >= PATIENCE_FRAMES and (now - last_fire) > COOLDOWN_S:
+            if consecutive_hits >= req_patience and (now - last_fire) > COOLDOWN_S:
                 last_fire = now
                 consecutive_hits = 0
                 rms_window.clear()
                 model.reset()
                 print(
-                    f"[wake] DETECTED {name} ({score:.2f}, rms={peak_rms:.0f}) -> notifying browser",
+                    f"[wake] DETECTED {name} ({score:.2f}, rms={peak_rms:.0f}, "
+                    f"media={media_playing}) -> notifying browser",
                     flush=True,
                 )
                 loop.call_soon_threadsafe(_broadcast_wake, loop, name)
 
 
 async def main():
+    _ensure_app_open()
     loop = asyncio.get_running_loop()
     threading.Thread(target=_audio_loop, args=(loop,), daemon=True).start()
     threading.Thread(target=_redis_proactive_loop, args=(loop,), daemon=True).start()

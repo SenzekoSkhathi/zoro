@@ -289,13 +289,14 @@ export default function Home() {
   const [contentShown, setContentShown] = useState(false);
 
   // Dynamic window sizing for the desktop shell:
-  // Compact 240x240 for Orb-only mode; expands to 500x860 when cards/chat open.
+  // Compact 240x240 for Orb-only mode; expands to 500x860 when cards/chat/login open.
   useEffect(() => {
     if (!isOverlay) return;
-    const targetW = contentShown ? 500 : 240;
-    const targetH = contentShown ? 860 : 240;
+    const needsExpanded = contentShown || authed === false;
+    const targetW = needsExpanded ? 500 : 240;
+    const targetH = needsExpanded ? 860 : 240;
     void callTauri("set_window_size", { width: targetW, height: targetH });
-  }, [isOverlay, contentShown]);
+  }, [isOverlay, contentShown, authed]);
   // Briefly suppress wake-word re-activation right after a session ends,
   // so residual TTS audio bleeding into the mic can't bounce her back on.
   const [wakeGate, setWakeGate] = useState(false);
@@ -307,12 +308,15 @@ export default function Home() {
 
   const connect = useCallback(async () => {
     setPhase("connecting");
+    setError(null);
     try {
       // Unique room per session: every connect creates a NEW room so
       // LiveKit's automatic agent dispatch reliably fires (a fixed name
       // lingers on the server and the agent never gets re-dispatched).
       const room = `zoro-${crypto.randomUUID()}`;
-      const res = await fetch(`/api/token?room=${encodeURIComponent(room)}`);
+      const res = await fetch(`/api/token?room=${encodeURIComponent(room)}`, {
+        cache: "no-store",
+      });
       if (!res.ok) throw new Error(`token request failed (${res.status})`);
       const data = (await res.json()) as { token: string };
       setToken(data.token);
@@ -334,7 +338,8 @@ export default function Home() {
     unmute: wakeUnmute,
   } = useWakeService(() => {
     if (wakeGateRef.current || deactivatedRef.current) return;
-    setPhase((p) => (p === "idle" ? "connecting" : p));
+    setError(null);
+    setPhase((p) => (p === "idle" || p === "error" ? "connecting" : p));
   });
 
   useEffect(() => {
@@ -342,7 +347,9 @@ export default function Home() {
     if (phase === "connecting" || phase === "active" || wakeGate) wakePause();
     // Hold off on rearming the wake word while the post-session cooldown
     // or explicit deactivation is active.
-    if (phase === "idle" && !wakeGate && !deactivated) wakeResume();
+    if ((phase === "idle" || phase === "error") && !wakeGate && !deactivated) {
+      wakeResume();
+    }
   }, [phase, token, connect, wakePause, wakeResume, wakeGate, deactivated]);
 
   // Native wake bridge: in the Tauri shell the page can't reach the local
@@ -355,12 +362,22 @@ export default function Home() {
     const w = window as unknown as { __zoroWake?: () => void };
     w.__zoroWake = () => {
       if (wakeGateRef.current || deactivatedRef.current) return;
-      setPhase((p) => (p === "idle" ? "connecting" : p));
+      setError(null);
+      setPhase((p) => (p === "idle" || p === "error" ? "connecting" : p));
     };
     return () => {
       delete w.__zoroWake;
     };
   }, [authed]);
+
+  const startCall = useCallback(() => {
+    void primeAudio();
+    setError(null);
+    setToken(null);
+    setDeactivated(false);
+    wakeUnmute();
+    setPhase("connecting");
+  }, [primeAudio, wakeUnmute]);
 
   const activate = useCallback(() => {
     setError(null);
@@ -426,12 +443,7 @@ export default function Home() {
             mode={faceMode}
             pinned={alwaysOnTop}
             onStartDrag={handleStartDrag}
-            onClick={() => {
-              void primeAudio();
-              setDeactivated(false);
-              wakeUnmute();
-              if (phase === "idle") setPhase("connecting");
-            }}
+            onClick={startCall}
           />
         </div>
       )}
@@ -440,19 +452,14 @@ export default function Home() {
         <div className={styles.activateDock}>
           <button
             className={styles.button}
-            onClick={() => {
-              void primeAudio();
-              setDeactivated(false);
-              wakeUnmute();
-              if (phase === "idle") setPhase("connecting");
-            }}
+            onClick={startCall}
           >
             {phase === "connecting" ? "Connecting..." : "Tap to Speak"}
           </button>
         </div>
       )}
 
-      {phase === "error" && (
+      {phase === "error" && !isOverlay && (
         <div className={styles.panel}>
           <p className={styles.error}>{error}</p>
           <button className={styles.button} onClick={activate}>
@@ -479,6 +486,7 @@ export default function Home() {
           <RoomAudioRenderer />
           <ZoroConversation
             onEnd={endCall}
+            onReconnect={startCall}
             onDeactivate={deactivate}
             onContentChange={setContentShown}
             isOverlay={isOverlay}
@@ -504,6 +512,7 @@ function avg(bands: number[]): number {
 
 function ZoroConversation({
   onEnd,
+  onReconnect,
   onDeactivate,
   onContentChange,
   isOverlay = false,
@@ -511,6 +520,7 @@ function ZoroConversation({
   onStartDrag,
 }: {
   onEnd: () => void;
+  onReconnect: () => void;
   onDeactivate: () => void;
   onContentChange: (shown: boolean) => void;
   isOverlay?: boolean;
@@ -519,6 +529,32 @@ function ZoroConversation({
 }) {
   const { state, audioTrack } = useVoiceAssistant();
   const { microphoneTrack } = useLocalParticipant();
+  const agentSeenRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      state === "listening" ||
+      state === "thinking" ||
+      state === "speaking"
+    ) {
+      agentSeenRef.current = true;
+    }
+  }, [state]);
+
+  // Auto-clean up room if the agent disconnects after a session or fails to join within 18s
+  useEffect(() => {
+    if (agentSeenRef.current && state === "disconnected") {
+      const t = setTimeout(onEnd, 1200);
+      return () => clearTimeout(t);
+    }
+    if (
+      !agentSeenRef.current &&
+      (state === "connecting" || state === "disconnected" || !state)
+    ) {
+      const t = setTimeout(onEnd, 18000);
+      return () => clearTimeout(t);
+    }
+  }, [state, onEnd]);
 
   const opts = { bands: 5, updateInterval: 32 };
   const userBands = useMultibandTrackVolume(
@@ -598,7 +634,9 @@ function ZoroConversation({
     ? "speaking"
     : state === "thinking"
       ? "thinking"
-      : "listening";
+      : state === "connecting" || state === "initializing"
+        ? "connecting"
+        : "listening";
 
   return (
     <div className={styles.room} data-overlay={isOverlay ? "true" : undefined}>
@@ -627,6 +665,13 @@ function ZoroConversation({
           docked={contentShown && !isOverlay}
           pinned={alwaysOnTop}
           onStartDrag={onStartDrag}
+          onClick={() => {
+            if (state === "disconnected" || state === "connecting") {
+              onReconnect();
+            } else {
+              onEnd();
+            }
+          }}
         />
       </div>
       {!contentShown && !isOverlay && (

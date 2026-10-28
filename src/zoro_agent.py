@@ -3350,10 +3350,11 @@ if __name__ == "__main__":
     # Single-user setup: livekit's prod defaults (4 idle worker processes,
     # load_threshold=0.7) saturate this CPU and starve Kokoro mid-utterance,
     # causing audible breaks. Keep one idle process for instant pickup and
-    # raise the load gate so the worker doesn't churn "unavailable/available"
-    # while Kokoro is synthesizing.
+    # override load_fnc so high Windows background CPU (95%+) never marks
+    # Zoro's worker as "unavailable" when the user clicks the orb or wakes her.
     cli.run_app(WorkerOptions(
         entrypoint_fnc=entrypoint,
         num_idle_processes=1,
-        load_threshold=0.95,
+        load_fnc=lambda: 0.1,
+        load_threshold=float("inf"),
     ))

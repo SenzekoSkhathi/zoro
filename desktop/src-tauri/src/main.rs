@@ -280,10 +280,38 @@ fn get_always_on_top(_window: WebviewWindow) -> Result<bool, String> {
 fn set_window_size(window: WebviewWindow, width: f64, height: f64) -> Result<(), String> {
     if let Ok(Some(monitor)) = window.primary_monitor() {
         let scale = monitor.scale_factor();
+        let screen_size = monitor.size();
+        let new_w = (width * scale) as u32;
+        let new_h = (height * scale) as u32;
+
+        if let (Ok(old_size), Ok(old_pos)) = (window.outer_size(), window.outer_position()) {
+            if old_size.width.abs_diff(new_w) <= 2 && old_size.height.abs_diff(new_h) <= 2 {
+                return Ok(());
+            }
+            // Anchor the bottom-right corner (where the Orb sits) so expanding for
+            // display cards grows upward/leftward instead of pushing the Orb off-screen!
+            let anchor_right = old_pos.x + (old_size.width as i32);
+            let anchor_bottom = old_pos.y + (old_size.height as i32);
+            let max_x = (screen_size.width as i32 - new_w as i32).max(0);
+            let max_y = (screen_size.height as i32 - new_h as i32).max(0);
+            let new_x = (anchor_right - new_w as i32).clamp(0, max_x);
+            let new_y = (anchor_bottom - new_h as i32).clamp(0, max_y);
+
+            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                width: new_w,
+                height: new_h,
+            }));
+            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                x: new_x,
+                y: new_y,
+            }));
+            return Ok(());
+        }
+
         window
             .set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                width: (width * scale) as u32,
-                height: (height * scale) as u32,
+                width: new_w,
+                height: new_h,
             }))
             .map_err(|e| e.to_string())?;
     }
@@ -295,16 +323,57 @@ fn hide_window(window: WebviewWindow) -> Result<(), String> {
     window.hide().map_err(|e| e.to_string())
 }
 
-/// Reveal + focus the main window (used by the tray).
+fn ensure_window_on_screen(win: &WebviewWindow) {
+    if let Ok(Some(monitor)) = win.primary_monitor() {
+        let screen_size = monitor.size();
+        let scale = monitor.scale_factor();
+        if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
+            let sw = screen_size.width as i32;
+            let sh = screen_size.height as i32;
+            let w = size.width as i32;
+            let h = size.height as i32;
+            if pos.x < -40 || pos.y < -40 || pos.x + w > sw + 40 || pos.y + h > sh + 40 {
+                let win_w = (240.0 * scale) as i32;
+                let win_h = (240.0 * scale) as i32;
+                let pos_x = sw - win_w - (24.0 * scale) as i32;
+                let pos_y = sh - win_h - (60.0 * scale) as i32;
+                let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                    width: win_w as u32,
+                    height: win_h as u32,
+                }));
+                let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                    x: pos_x,
+                    y: pos_y,
+                }));
+            }
+        }
+    }
+}
+
+/// Reveal + focus the main window (used by the tray and Desktop shortcut).
 fn surface_main(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
+        ensure_window_on_screen(&win);
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
-        if IS_PINNED.load(Ordering::SeqCst) {
-            #[cfg(target_os = "windows")]
-            if let Ok(hwnd) = win.hwnd() {
-                win32::apply_topmost(hwnd.0 as *mut std::ffi::c_void, true);
+        #[cfg(target_os = "windows")]
+        if let Ok(hwnd) = win.hwnd() {
+            let ptr = hwnd.0 as *mut std::ffi::c_void;
+            if IS_PINNED.load(Ordering::SeqCst) {
+                win32::apply_topmost(ptr, true);
+            } else {
+                unsafe {
+                    win32::SetWindowPos(
+                        ptr,
+                        win32::HWND_TOP,
+                        0,
+                        0,
+                        0,
+                        0,
+                        win32::SWP_NOMOVE | win32::SWP_NOSIZE | win32::SWP_SHOWWINDOW,
+                    );
+                }
             }
         }
     }
@@ -313,6 +382,7 @@ fn surface_main(app: &tauri::AppHandle) {
 /// Reveal the main window without stealing focus from fullscreen apps/movies.
 fn surface_main_passive(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
+        ensure_window_on_screen(&win);
         let _ = win.show();
         let _ = win.unminimize();
     }
@@ -362,14 +432,22 @@ fn argv_has_wake<I: IntoIterator<Item = String>>(argv: I) -> bool {
     argv.into_iter().any(|a| a == "--wake" || a == "--proactive")
 }
 
+fn argv_has_ensure<I: IntoIterator<Item = String>>(argv: I) -> bool {
+    argv.into_iter().any(|a| a == "--ensure")
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            if argv_has_wake(argv) {
+            if argv_has_wake(argv.clone()) {
                 surface_main_passive(app);
                 trigger_wake(app);
+            } else if argv_has_ensure(argv) {
+                surface_main_passive(app);
             } else {
+                // User launched Zoro shortcut directly -> show window in front AND wake Zoro
                 surface_main(app);
+                trigger_wake(app);
             }
         }))
         .plugin(tauri_plugin_autostart::init(
@@ -486,6 +564,8 @@ fn main() {
                         width: win_w as u32,
                         height: win_h as u32,
                     }));
+                    let _ = win.show();
+                    let _ = win.unminimize();
                 }
 
                 if let Ok(url_str) = std::env::var("ZORO_OVERLAY_URL") {

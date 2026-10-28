@@ -206,12 +206,11 @@ export function Orb({
   const onStartDragRef = useRef(onStartDrag);
   onStartDragRef.current = onStartDrag;
 
-  // Double-click + hold/move & press-drag vs single-click state refs
+  // Double-click + hold/move vs single-click state refs
   const lastPointerDownRef = useRef<number>(0);
-  const pointerDownPosRef = useRef<{ x: number; y: number } | null>(null);
   const singleClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressNextClickUntilRef = useRef<number>(0);
-  const dragStartedRef = useRef<boolean>(false);
+  const dragCleanupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clampedExternalEnergy =
     energy !== undefined ? Math.min(1, Math.max(0, energy)) : undefined;
@@ -796,8 +795,11 @@ export function Orb({
   useEffect(() => {
     const w = window as unknown as { __zoroEndDrag?: () => void };
     w.__zoroEndDrag = () => {
-      dragStartedRef.current = false;
-      suppressNextClickUntilRef.current = performance.now() + 380;
+      suppressNextClickUntilRef.current = performance.now() + 280;
+      if (dragCleanupTimerRef.current) {
+        clearTimeout(dragCleanupTimerRef.current);
+        dragCleanupTimerRef.current = null;
+      }
       if (wrapperRef.current) {
         delete wrapperRef.current.dataset.dragging;
       }
@@ -807,6 +809,9 @@ export function Orb({
       if (singleClickTimerRef.current) {
         clearTimeout(singleClickTimerRef.current);
       }
+      if (dragCleanupTimerRef.current) {
+        clearTimeout(dragCleanupTimerRef.current);
+      }
     };
   }, []);
 
@@ -815,11 +820,18 @@ export function Orb({
       clearTimeout(singleClickTimerRef.current);
       singleClickTimerRef.current = null;
     }
-    dragStartedRef.current = true;
-    suppressNextClickUntilRef.current = performance.now() + 800;
+    suppressNextClickUntilRef.current = performance.now() + 550;
     if (wrapperRef.current) {
       wrapperRef.current.dataset.dragging = "true";
     }
+    if (dragCleanupTimerRef.current) {
+      clearTimeout(dragCleanupTimerRef.current);
+    }
+    dragCleanupTimerRef.current = setTimeout(() => {
+      if (wrapperRef.current) {
+        delete wrapperRef.current.dataset.dragging;
+      }
+    }, 2500);
     onStartDragRef.current?.();
   };
 
@@ -828,35 +840,19 @@ export function Orb({
     const now = performance.now();
     const delta = now - lastPointerDownRef.current;
     lastPointerDownRef.current = now;
-    pointerDownPosRef.current = { x: e.clientX, y: e.clientY };
-    dragStartedRef.current = false;
 
-    if (delta > 0 && delta < 460) {
-      // Double-click detected -> immediately start native window drag!
+    if (delta > 0 && delta < 360) {
+      // Double-click detected -> cancel single-click and start native window drag!
       beginNativeDrag();
     }
   };
 
-  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (dragStartedRef.current) return;
-    if ((e.buttons & 1) !== 1 || !pointerDownPosRef.current) return;
-    const dx = e.clientX - pointerDownPosRef.current.x;
-    const dy = e.clientY - pointerDownPosRef.current.y;
-    if (Math.hypot(dx, dy) > 5) {
-      // User pressed and moved the mouse -> start native window drag!
-      beginNativeDrag();
+  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (performance.now() < suppressNextClickUntilRef.current) {
+      return;
     }
-  };
-
-  const handlePointerUp = () => {
-    pointerDownPosRef.current = null;
-  };
-
-  const handleClick = () => {
-    if (
-      dragStartedRef.current ||
-      performance.now() < suppressNextClickUntilRef.current
-    ) {
+    if (e.detail >= 2) {
+      beginNativeDrag();
       return;
     }
     if (!onClickRef.current) return;
@@ -866,13 +862,10 @@ export function Orb({
     }
     singleClickTimerRef.current = setTimeout(() => {
       singleClickTimerRef.current = null;
-      if (
-        !dragStartedRef.current &&
-        performance.now() >= suppressNextClickUntilRef.current
-      ) {
+      if (performance.now() >= suppressNextClickUntilRef.current) {
         onClickRef.current?.();
       }
-    }, 260);
+    }, 170);
   };
 
   const style = {
@@ -891,12 +884,8 @@ export function Orb({
         data-reactive={listenToMic || energy !== undefined ? "true" : undefined}
         style={style}
         onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
         onDoubleClick={() => {
-          if (!dragStartedRef.current) {
-            beginNativeDrag();
-          }
+          beginNativeDrag();
         }}
         onClick={handleClick}
         role="button"
