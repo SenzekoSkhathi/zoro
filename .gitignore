@@ -1,0 +1,6 @@
+data/*
+!data/.gitkeep
+*.log
+__pycache__/
+web/node_modules/
+web/.next/

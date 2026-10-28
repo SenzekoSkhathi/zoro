@@ -1,0 +1,197 @@
+/* Zoro is a dark HUD app — there is no light mode. Anchor the base
+   surface to the instrument backdrop so there's no white flash before
+   the main view paints, and so overscroll/rubber-band reveals the same
+   deep navy rather than the browser default. */
+:root {
+  color-scheme: dark;
+  --zoro-base: #04080d;
+  --zoro-ink: #d6f3ff;
+  --zoro-cyan: #4fe3ff;
+}
+
+html {
+  height: 100%;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  color: var(--zoro-ink);
+  background: var(--zoro-base);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body[data-overlay="true"],
+html[data-overlay="true"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Themed selection + thin instrument scrollbars for in-card overflow. */
+::selection {
+  background: rgba(79, 227, 255, 0.28);
+  color: #eafbff;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(79, 227, 255, 0.3) transparent;
+}
+*::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(79, 227, 255, 0.28);
+  border-radius: 4px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Centre-screen widget stage: 1 big + up to 2 small widgets at a time,
+   resizing as more widgets open.
+   ──────────────────────────────────────────────────────────────────── */
+.zoro-widget-stage {
+  display: grid;
+  gap: 1.15rem;
+  align-items: start;
+  justify-content: center;
+  width: min(1220px, 92vw);
+  z-index: 10;
+  pointer-events: none;
+  transition: grid-template-columns 0.3s ease;
+}
+
+.zoro-widget-stage:empty {
+  display: none;
+}
+
+/* Desktop overlay: stage floats at the true centre of the screen, independent
+   of where the Orb sits. */
+.zoro-widget-stage[data-expanded="true"] {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(1220px, calc(100vw - 56px));
+  max-height: calc(100vh - 72px);
+}
+
+.zoro-widget-slot {
+  min-width: 0;
+  width: 100%;
+  pointer-events: auto;
+  transition: width 0.28s ease;
+}
+
+.zoro-widget-slot > section {
+  width: 100% !important;
+  max-width: none !important;
+}
+
+/* Single big widget: generous hero width + tall body */
+.zoro-widget-stage[data-layout="b1s0"] {
+  grid-template-areas: "b";
+  grid-template-columns: min(720px, 90vw);
+}
+.zoro-widget-stage[data-layout="b1s0"] .zoro-widget-slot > section {
+  max-height: 76vh !important;
+}
+.zoro-widget-stage[data-layout="b1s0"] .zoro-widget-slot > section > div {
+  max-height: calc(76vh - 3.2rem) !important;
+}
+
+/* Single small widget */
+.zoro-widget-stage[data-layout="b0s1"] {
+  grid-template-areas: "s1";
+  grid-template-columns: min(460px, 88vw);
+}
+.zoro-widget-stage[data-layout="b0s1"] .zoro-widget-slot > section {
+  max-height: 62vh !important;
+}
+.zoro-widget-stage[data-layout="b0s1"] .zoro-widget-slot > section > div {
+  max-height: calc(62vh - 3.2rem) !important;
+}
+
+/* Two small widgets side-by-side */
+.zoro-widget-stage[data-layout="b0s2"] {
+  grid-template-areas: "s1 s2";
+  grid-template-columns: repeat(2, minmax(0, 420px));
+}
+.zoro-widget-stage[data-layout="b0s2"] .zoro-widget-slot > section {
+  max-height: 62vh !important;
+}
+.zoro-widget-stage[data-layout="b0s2"] .zoro-widget-slot > section > div {
+  max-height: calc(62vh - 3.2rem) !important;
+}
+
+/* 1 big + 1 small: big tightens slightly to share the stage with the small */
+.zoro-widget-stage[data-layout="b1s1"] {
+  grid-template-areas: "b s1";
+  grid-template-columns: minmax(0, 620px) minmax(0, 390px);
+}
+.zoro-widget-stage[data-layout="b1s1"] .zoro-widget-slot[data-size="big"] > section {
+  max-height: 74vh !important;
+}
+.zoro-widget-stage[data-layout="b1s1"] .zoro-widget-slot[data-size="big"] > section > div {
+  max-height: calc(74vh - 3.2rem) !important;
+}
+.zoro-widget-stage[data-layout="b1s1"] .zoro-widget-slot[data-size="small"] > section {
+  max-height: 58vh !important;
+}
+.zoro-widget-stage[data-layout="b1s1"] .zoro-widget-slot[data-size="small"] > section > div {
+  max-height: calc(58vh - 3.2rem) !important;
+}
+
+/* 1 big + 2 small: big on the left, the two smalls compactly stacked on the right */
+.zoro-widget-stage[data-layout="b1s2"] {
+  grid-template-areas:
+    "b s1"
+    "b s2";
+  grid-template-columns: minmax(0, 580px) minmax(0, 370px);
+  grid-template-rows: auto auto;
+}
+.zoro-widget-stage[data-layout="b1s2"] .zoro-widget-slot[data-size="big"] > section {
+  max-height: 76vh !important;
+}
+.zoro-widget-stage[data-layout="b1s2"] .zoro-widget-slot[data-size="big"] > section > div {
+  max-height: calc(76vh - 3.2rem) !important;
+}
+.zoro-widget-stage[data-layout="b1s2"] .zoro-widget-slot[data-size="small"] > section {
+  max-height: 36vh !important;
+}
+.zoro-widget-stage[data-layout="b1s2"] .zoro-widget-slot[data-size="small"] > section > div {
+  max-height: calc(36vh - 3.2rem) !important;
+}
+
+@media (max-width: 900px) {
+  .zoro-widget-stage[data-layout="b0s2"],
+  .zoro-widget-stage[data-layout="b1s1"],
+  .zoro-widget-stage[data-layout="b1s2"] {
+    grid-template-areas:
+      "b"
+      "s1"
+      "s2";
+    grid-template-columns: min(600px, 92vw);
+  }
+}
+

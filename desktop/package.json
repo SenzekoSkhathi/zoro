@@ -1,0 +1,14 @@
+{
+  "name": "zoro-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native desktop shell for Zoro — wraps the hosted UI with tray, autostart, and wake-summon.",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

@@ -1,0 +1,525 @@
+.main {
+  /* Cyan intensity ladder — read top to bottom as bright→ambient:
+     active/interactive → structural lines → quiet decoration. */
+  --cyan: #4fe3ff; /* active, interactive, signature anchors */
+  --cyan-soft: rgba(79, 227, 255, 0.55); /* glow, hover, emphasis */
+  --cyan-faint: rgba(79, 227, 255, 0.16); /* structural hairlines (frame, panels) */
+  --cyan-ambient: rgba(79, 227, 255, 0.08); /* ambient decoration (rulers, ticks) */
+  --glass: rgba(8, 18, 27, 0.5);
+
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2rem;
+  overflow: hidden;
+  color: #d6f3ff;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  /* Single smooth glow over a uniform base — no seams or banding. */
+  background:
+    radial-gradient(
+      ellipse 90% 75% at 50% 45%,
+      rgba(79, 227, 255, 0.12) 0%,
+      rgba(79, 227, 255, 0.04) 35%,
+      #04080d 70%
+    );
+  background-color: #04080d;
+}
+
+.main[data-overlay="true"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  min-height: 100vh;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.main[data-overlay="true"] > * {
+  pointer-events: auto;
+}
+
+.overlayContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  pointer-events: auto;
+}
+
+/* Energy beam projected from the docked orb toward the content panel —
+   sells "Zoro is rendering this". Fixed-anchored near the orb corner,
+   angled up toward centre, with a pulse travelling along it. */
+/* Beam is positioned/sized/rotated inline (aimed from the docked orb to
+   the panel centre). Anchored at its left end = the orb. */
+.beam {
+  position: fixed;
+  height: 2px;
+  z-index: 0;
+  transform-origin: 0 50%;
+  background: linear-gradient(
+    90deg,
+    var(--cyan-soft) 0%,
+    rgba(79, 227, 255, 0.2) 40%,
+    transparent 82%
+  );
+  filter: drop-shadow(0 0 6px var(--cyan-faint));
+  pointer-events: none;
+  opacity: 0;
+  animation: beamIn 0.5s ease 0.15s forwards;
+}
+.beam::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 46px;
+  height: 4px;
+  margin-top: -2px;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    #eafbff,
+    var(--cyan-soft),
+    transparent
+  );
+  animation: beamPulse 2.6s linear infinite;
+}
+
+@keyframes beamIn {
+  to {
+    opacity: 0.75;
+  }
+}
+@keyframes beamPulse {
+  0% {
+    left: 0;
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 0;
+  }
+  100% {
+    left: 88%;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .beam {
+    animation: none;
+    opacity: 0.6;
+  }
+  .beam::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* ── Ambient instrument shell ──────────────────────────────────────── */
+.hud {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+/* Faint engineering grid across the whole backdrop. */
+.gridbg {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(79, 227, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(79, 227, 255, 0.05) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: radial-gradient(ellipse 75% 70% at 50% 48%, #000, transparent 85%);
+  -webkit-mask-image: radial-gradient(
+    ellipse 75% 70% at 50% 48%,
+    #000,
+    transparent 85%
+  );
+}
+
+/* Edge darkening so the centre reads as the focal instrument. */
+.vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 82% 78% at 50% 48%,
+    transparent 58%,
+    rgba(2, 5, 9, 0.4) 82%,
+    rgba(2, 5, 9, 0.62) 100%
+  );
+}
+
+/* Single faint scan band drifting down the whole screen. */
+.scanline {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(79, 227, 255, 0.022) 48%,
+    rgba(79, 227, 255, 0.022) 52%,
+    transparent 100%
+  );
+  background-size: 100% 280%;
+  animation: screenScan 16s linear infinite;
+}
+@keyframes screenScan {
+  from {
+    background-position: 0 -130%;
+  }
+  to {
+    background-position: 0 130%;
+  }
+}
+
+/* HUD corner brackets. */
+.frame {
+  position: absolute;
+  inset: 20px;
+  border: 1px solid var(--cyan-faint);
+  border-radius: 2px;
+}
+
+/* Tick rulers running down both side edges. */
+.ruler {
+  position: absolute;
+  top: 12%;
+  bottom: 12%;
+  width: 9px;
+  background-image: repeating-linear-gradient(
+    180deg,
+    var(--cyan-ambient) 0 1px,
+    transparent 1px 30px
+  );
+}
+.rulerL {
+  left: 28px;
+  border-left: 1px solid var(--cyan-ambient);
+}
+.rulerR {
+  right: 28px;
+  border-right: 1px solid var(--cyan-ambient);
+  transform: scaleX(-1);
+}
+
+/* Top identity strip + bottom telemetry strip. */
+.bar {
+  position: absolute;
+  left: 64px;
+  right: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.66rem;
+  letter-spacing: 0.24em;
+  color: #6fb8d0;
+}
+.barTop {
+  top: 30px;
+  border-bottom: 1px solid var(--cyan-faint);
+  padding-bottom: 8px;
+}
+.barBot {
+  bottom: 30px;
+  border-top: 1px solid var(--cyan-faint);
+  padding-top: 8px;
+  gap: 1.4rem;
+  justify-content: flex-start;
+}
+
+.sysTag {
+  color: var(--cyan);
+  text-shadow: 0 0 10px var(--cyan-soft);
+}
+
+.clock {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  color: #9fd8ec;
+  font-variant-numeric: tabular-nums;
+}
+.sep {
+  width: 1px;
+  height: 0.8rem;
+  background: var(--cyan-faint);
+}
+
+.telem {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.dotOk {
+  background: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan-soft);
+}
+.dotBad {
+  background: #ff7a8a;
+  box-shadow: 0 0 8px rgba(255, 122, 138, 0.6);
+}
+
+/* OFFLINE marker tucked just below the frame line in the bottom-right
+   corner — shown whenever Zoro isn't in an active session. */
+.offlineMark {
+  position: absolute;
+  right: 20px;
+  bottom: 4px;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.32em;
+  color: #ff7a8a;
+  text-shadow: 0 0 8px rgba(255, 122, 138, 0.45);
+}
+
+.corner {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 2px solid var(--cyan);
+  filter: drop-shadow(0 0 6px var(--cyan-soft));
+}
+.cornerTL {
+  top: -1px;
+  left: -1px;
+  border-right: none;
+  border-bottom: none;
+}
+.cornerTR {
+  top: -1px;
+  right: -1px;
+  border-left: none;
+  border-bottom: none;
+}
+.cornerBL {
+  bottom: -1px;
+  left: -1px;
+  border-right: none;
+  border-top: none;
+}
+.cornerBR {
+  bottom: -1px;
+  right: -1px;
+  border-left: none;
+  border-top: none;
+}
+
+.title {
+  position: relative;
+  z-index: 1;
+  font-size: 2.6rem;
+  font-weight: 700;
+  letter-spacing: 0.55em;
+  margin: 0;
+  padding-left: 0.55em;
+  color: #eafbff;
+  text-shadow:
+    0 0 12px var(--cyan-soft),
+    0 0 30px var(--cyan-faint);
+}
+
+.subtitle {
+  margin: -1.4rem 0 0;
+  font-size: 0.7rem;
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+  color: var(--cyan);
+  opacity: 0.7;
+}
+
+.panel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.4rem;
+  padding: 1.9rem 2.6rem;
+  min-width: 320px;
+  background: linear-gradient(
+    180deg,
+    rgba(8, 18, 27, 0.78),
+    rgba(6, 13, 20, 0.86)
+  );
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  /* Angular chamfered shell with a hairline border (matches HudPanel). */
+  outline: 1px solid var(--cyan-faint);
+  outline-offset: -1px;
+  clip-path: polygon(
+    14px 0,
+    calc(100% - 14px) 0,
+    100% 14px,
+    100% calc(100% - 14px),
+    calc(100% - 14px) 100%,
+    14px 100%,
+    0 calc(100% - 14px),
+    0 14px
+  );
+  filter: drop-shadow(0 16px 44px rgba(0, 0, 0, 0.55))
+    drop-shadow(0 0 16px var(--cyan-faint));
+}
+
+/* Small instrument kicker above the prompt text. */
+.panel::before {
+  content: "● SYSTEM";
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.32em;
+  color: var(--cyan);
+  text-shadow: 0 0 10px var(--cyan-soft);
+}
+
+.hint {
+  margin: 0;
+  text-align: center;
+  color: #a9d8ec;
+  font-size: 0.95rem;
+}
+.hint strong {
+  color: #eafbff;
+  text-shadow: 0 0 10px var(--cyan-soft);
+}
+
+.error {
+  margin: 0;
+  text-align: center;
+  color: #ff7a8a;
+  text-shadow: 0 0 10px rgba(255, 122, 138, 0.4);
+}
+
+.button,
+.buttonSecondary {
+  position: relative;
+  border-radius: 999px;
+  padding: 0.8rem 2.4rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease;
+}
+
+/* Lock the Activate button near the bottom edge — clear of the orb and
+   above the telemetry strip — instead of sitting right under the orb. */
+.activateDock {
+  position: fixed;
+  left: 50%;
+  bottom: 90px;
+  z-index: 1;
+  transform: translateX(-50%);
+}
+
+.button {
+  border: 1px solid var(--cyan);
+  background: linear-gradient(
+    180deg,
+    rgba(63, 208, 255, 0.28),
+    rgba(63, 208, 255, 0.08)
+  );
+  color: #eafbff;
+  box-shadow:
+    0 0 18px var(--cyan-faint),
+    inset 0 0 14px rgba(63, 208, 255, 0.15);
+}
+.button:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 0 28px var(--cyan-soft),
+    inset 0 0 18px rgba(63, 208, 255, 0.25);
+}
+
+.buttonSecondary {
+  border: 1px solid var(--cyan-faint);
+  background: rgba(255, 255, 255, 0.04);
+  color: #a9d8ec;
+}
+.buttonSecondary:hover {
+  border-color: var(--cyan-soft);
+  color: #eafbff;
+}
+
+.button:active,
+.buttonSecondary:active {
+  transform: translateY(0);
+  opacity: 0.85;
+}
+
+.room {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.25rem;
+  background: transparent !important;
+}
+
+.room[data-overlay="true"] {
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: 1.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.visualizer {
+  width: 280px;
+  height: 110px;
+  --lk-va-bar-color: var(--cyan);
+  --lk-va-bg: transparent;
+  filter: drop-shadow(0 0 8px var(--cyan-soft));
+}
+
+.state {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.35em;
+  font-size: 0.78rem;
+  color: var(--cyan);
+  text-shadow: 0 0 10px var(--cyan-soft);
+}
+
+/* Offline warning — sits just above the bottom telemetry strip. */
+.heard {
+  position: fixed;
+  bottom: 60px;
+  z-index: 1;
+  margin: 0;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #ff8a98;
+}
+.heard::before {
+  content: "○ ";
+  color: #ff7a8a;
+}

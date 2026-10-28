@@ -1,0 +1,531 @@
+"""Nightly self-improvement loop.
+
+Sleeps until ZORO_REFLECT_HOUR (default 23, local time), then:
+
+  1. Pulls today's open lessons and last 7 days of tool stats.
+  2. Groups lessons by `tool` and frequency, picks the top 3.
+  3. Asks Claude Haiku to produce a short spoken-friendly paragraph
+     summarising the day: what went well, what stumbled, what she'd
+     like to improve, and any resources she still needs from Skhathi.
+  4. Writes one row to `zoro_daily_reports` (idempotent per date).
+  5. Marks the included lessons as `status='reported'`.
+
+Run as a managed process under zoro_supervisor (already registered).
+Can also be invoked directly for a one-off cycle:
+
+    python -c "import sys; sys.path.insert(0,'src'); \
+        import zoro_reflector; zoro_reflector.run_once()"
+"""
+from __future__ import annotations
+
+import json
+import os
+import time
+from collections import Counter
+from datetime import datetime, timezone
+from typing import Any
+
+import httpx
+
+import asyncio
+
+import zoro_chains
+import zoro_claude_code
+import zoro_episodes
+import zoro_lessons
+import zoro_self_mod
+
+_REFLECT_HOUR = int(os.environ.get("ZORO_REFLECT_HOUR", "23"))
+_REFLECT_MODEL = "claude-haiku-4-5"
+_LLM_TIMEOUT = 30
+_DB_TIMEOUT = 8
+
+_SYSTEM_PROMPT = (
+    "You are Zoro, a personal voice assistant, writing a short nightly "
+    "self-improvement report TO yourself in Skhathi's voice (he is your "
+    "principal). The report will be SPOKEN aloud in the morning, so it "
+    "must be plain prose: no markdown, no bullets, no em-dashes, no "
+    "ellipses. Two to four short sentences total.\n\n"
+    "Structure: (1) one sentence on the day's pattern (what worked, "
+    "what struggled); (2) if `recent_self_mods` is non-empty, one "
+    "sentence reporting what you tried autonomously yesterday and "
+    "whether it merged or was rolled back (be specific about the "
+    "outcome — Skhathi wants to know what changed about you); "
+    "(3) one sentence naming the top one or two things you would "
+    "improve next and how (be concrete — name a module or behaviour); "
+    "(4) if there are missing resources, one sentence asking Skhathi "
+    "for them by name; otherwise omit. Begin naturally "
+    "(e.g. \"Today I...\"). End cleanly — do not summarise yourself."
+)
+
+
+def _llm_summary(payload: dict) -> str | None:
+    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    key = os.environ.get("AZURE_OPENAI_API_KEY")
+    dep = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-6-sol")
+    user_msg = (
+        "Stats and lessons from the day are below. Write the report.\n\n"
+        + json.dumps(payload, indent=2)
+    )
+    if endpoint and key:
+        try:
+            from openai import AzureOpenAI
+            client = AzureOpenAI(
+                azure_endpoint=endpoint,
+                api_key=key,
+                api_version=os.environ.get("OPENAI_API_VERSION", "2024-10-21"),
+            )
+            resp = client.chat.completions.create(
+                model=dep,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                max_completion_tokens=350,
+            )
+            text = (resp.choices[0].message.content or "").strip()
+            if text:
+                return text
+        except Exception:
+            pass
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+    try:
+        r = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": _REFLECT_MODEL,
+                "max_tokens": 350,
+                "system": _SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": user_msg}],
+            },
+            timeout=_LLM_TIMEOUT,
+        )
+        r.raise_for_status()
+        data = r.json()
+        text = "".join(
+            b.get("text", "") for b in data.get("content", [])
+            if b.get("type") == "text"
+        ).strip()
+        return text or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _episode_stats() -> dict[str, int]:
+    """Coarse counts of today's episodes by outcome.
+
+    Pulls from tool_stats for the last 1 day — that already aggregates
+    success/error/aborted, which is what the report needs.
+    """
+    rows = zoro_episodes.tool_stats(days=1)
+    agg: dict[str, int] = {"success": 0, "error": 0, "aborted": 0}
+    for r in rows:
+        agg["success"] += r.get("success", 0)
+        agg["error"] += r.get("error", 0)
+        agg["aborted"] += r.get("aborted", 0)
+    return agg
+
+
+def _pick_top_lessons(lessons: list[dict], limit: int = 3) -> list[dict]:
+    """Frequency-weighted: lessons whose `tool` appears more often in
+    today's open lessons rank higher; ties broken by recency."""
+    if not lessons:
+        return []
+    tool_freq = Counter(l.get("tool", "") for l in lessons)
+    # Group by tool, take the freshest lesson per tool, sort by frequency.
+    by_tool: dict[str, dict] = {}
+    for l in lessons:  # lessons are already newest first
+        t = l.get("tool", "")
+        if t not in by_tool:
+            by_tool[t] = l
+    ranked = sorted(
+        by_tool.values(),
+        key=lambda l: (-tool_freq[l.get("tool", "")], -(l.get("id") or 0)),
+    )
+    return ranked[:limit]
+
+
+def _existing_report_for_today() -> dict | None:
+    today = datetime.now().date().isoformat()
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT id, summary, spoken FROM zoro.zoro_daily_reports
+                        WHERE report_date = %s
+                        LIMIT 1;
+                        """,
+                        (today,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        return dict(row)
+        except Exception:
+            pass
+
+    base = zoro_episodes._base()  # reuse env wiring
+    if base is None:
+        return None
+    url, headers = base
+    try:
+        r = httpx.get(
+            f"{url}/rest/v1/zoro_daily_reports"
+            f"?report_date=eq.{today}&select=id,summary,spoken&limit=1",
+            headers=headers, timeout=_DB_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows = r.json() or []
+        return rows[0] if rows else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _write_report(payload: dict) -> int | None:
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO zoro.zoro_daily_reports
+                        (report_date, summary, top_lesson_ids, needs_resources, episode_stats, spoken)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (report_date) DO UPDATE
+                        SET summary = EXCLUDED.summary,
+                            top_lesson_ids = EXCLUDED.top_lesson_ids,
+                            needs_resources = EXCLUDED.needs_resources,
+                            episode_stats = EXCLUDED.episode_stats,
+                            spoken = EXCLUDED.spoken
+                        RETURNING id;
+                        """,
+                        (
+                            payload.get("report_date"),
+                            payload.get("summary"),
+                            json.dumps(payload.get("top_lesson_ids") or []),
+                            json.dumps(payload.get("needs_resources") or []),
+                            json.dumps(payload.get("episode_stats") or {}),
+                            payload.get("spoken", False),
+                        ),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        val = row["id"] if isinstance(row, dict) else row[0]
+                        return int(val)
+        except Exception:  # noqa: BLE001
+            pass
+
+    base = zoro_episodes._base()
+    if base is None:
+        return None
+    url, headers = base
+    # Upsert: one report per date. PostgREST `Prefer: resolution=merge-duplicates`
+    # with the unique constraint on report_date handles re-runs the same day.
+    try:
+        r = httpx.post(
+            f"{url}/rest/v1/zoro_daily_reports?select=id",
+            headers={
+                **headers,
+                "Prefer": "return=representation,resolution=merge-duplicates",
+            },
+            json=payload,
+            timeout=_DB_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows = r.json()
+        if rows and isinstance(rows, list):
+            return int(rows[0]["id"])
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def run_once() -> dict[str, Any]:
+    """Generate today's report. Returns a small diagnostic dict so
+    callers can log what happened. Safe to call repeatedly; the DB
+    upsert keeps it one row per date."""
+    # Mine recurring tool-call chains BEFORE reading lessons, so any new
+    # chain-pattern lessons land in the same nightly cycle and can be
+    # included in the summary. Best-effort; failure here is non-fatal.
+    try:
+        chain_mining = zoro_chains.mine_and_write(days=7, max_new=5)
+    except Exception as e:  # noqa: BLE001
+        chain_mining = {"status": "skipped", "reason": f"chain miner error: {e}"}
+
+    open_lessons = zoro_lessons.open_lessons(limit=50)
+    stats = _episode_stats()
+    top = _pick_top_lessons(open_lessons, limit=3)
+    needs = sorted({
+        l.get("needs_resource") for l in open_lessons
+        if l.get("needs_resource")
+    })
+
+    if stats["success"] + stats["error"] + stats["aborted"] == 0 and not top:
+        return {"status": "idle", "reason": "no episodes or lessons today"}
+
+    recent_self_mods = zoro_self_mod.recent_attempts(hours=24)
+    llm_payload = {
+        "episode_stats": stats,
+        "top_lessons": [
+            {
+                "tool": l.get("tool"),
+                "failure_summary": l.get("failure_summary"),
+                "lesson": l.get("lesson"),
+                "suggested_improvement": l.get("suggested_improvement"),
+            }
+            for l in top
+        ],
+        "needs_resources": needs,
+        "recent_self_mods": [
+            {
+                "task": m.get("task", "")[:200],
+                "status": m.get("status"),
+                "files_changed": m.get("files_changed"),
+                "lines_changed": m.get("lines_changed"),
+                "notes": (m.get("notes") or "")[:200],
+            }
+            for m in recent_self_mods
+        ],
+    }
+    summary = _llm_summary(llm_payload)
+    if not summary:
+        return {"status": "skipped", "reason": "no summary (no API key or LLM failure)"}
+
+    payload = {
+        "report_date": datetime.now().date().isoformat(),
+        "summary": summary,
+        "top_lesson_ids": [l.get("id") for l in top if l.get("id")],
+        "needs_resources": needs,
+        "episode_stats": stats,
+        "spoken": False,
+    }
+    rid = _write_report(payload)
+    if rid is None:
+        return {"status": "skipped", "reason": "report write failed"}
+
+    for l in top:
+        lid = l.get("id")
+        if lid:
+            zoro_lessons.mark_status(int(lid), "reported")
+
+    # Autonomous self-mod: pick at most one small candidate and dispatch
+    # it. Best-effort — any failure is captured in zoro_self_mod_log.
+    auto_outcome = _maybe_autonomous_self_mod(top)
+
+    return {
+        "status": "wrote",
+        "report_id": rid,
+        "lessons_reported": len(top),
+        "needs_resources": needs,
+        "autonomous": auto_outcome,
+        "chain_mining": chain_mining,
+    }
+
+
+def _maybe_autonomous_self_mod(top_lessons: list[dict]) -> dict:
+    """Pick one small, concrete suggestion and run it through the
+    harness with the coder role and a small-change cap. Returns a small
+    diagnostic dict for run_once()'s return value."""
+    if not zoro_self_mod.autonomous_enabled():
+        return {"status": "skipped", "reason": "autonomous disabled or stood down"}
+    if zoro_self_mod.remaining_today() <= 0:
+        return {"status": "skipped", "reason": "daily cap reached"}
+
+    candidate = None
+    for l in top_lessons:
+        sug = (l.get("suggested_improvement") or "").strip()
+        needs = (l.get("needs_resource") or "").strip()
+        if needs:
+            # Needs new resource from Skhathi — not autonomously fixable.
+            continue
+        if not sug or len(sug) < 12:
+            continue
+        candidate = l
+        break
+    if candidate is None:
+        return {"status": "skipped", "reason": "no small concrete candidate"}
+
+    task = (
+        candidate.get("suggested_improvement", "").strip()
+        + "\n\nContext: this came from an autonomous reflection over a "
+        "recent failure. The relevant failure was: "
+        + (candidate.get("failure_summary") or "(unknown)")
+    )
+    lesson_id = candidate.get("id")
+    return asyncio.run(_run_autonomous_attempt(task, lesson_id))
+
+
+async def _run_autonomous_attempt(task: str, lesson_id: int | None) -> dict:
+    final: dict = {"status": "skipped", "reason": "no merge event"}
+    branch = None
+    try:
+        async for ev in zoro_claude_code.run_streaming(
+            task, role="coder",
+            max_files=zoro_self_mod.DEFAULT_MAX_FILES,
+            max_lines=zoro_self_mod.DEFAULT_MAX_LINES,
+        ):
+            if ev.get("kind") == "merge":
+                final = {
+                    "status": ev.get("status", ""),
+                    "text": ev.get("text", ""),
+                    "files_changed": ev.get("files_changed"),
+                    "lines_changed": ev.get("lines_changed"),
+                }
+                branch = ev.get("branch")
+            elif ev.get("kind") == "error":
+                final = {"status": "skipped", "reason": ev.get("text", "")}
+    except Exception as e:  # noqa: BLE001
+        final = {"status": "skipped", "reason": f"{type(e).__name__}: {e}"}
+
+    zoro_self_mod.log_attempt(
+        lesson_id=lesson_id,
+        role="coder",
+        task=task,
+        status=final.get("status") or "skipped",
+        files_changed=final.get("files_changed"),
+        lines_changed=final.get("lines_changed"),
+        branch=branch,
+        notes=final.get("reason") or final.get("text"),
+    )
+    if lesson_id:
+        outcome = final.get("status")
+        new_status = "fixed" if outcome == "merged" else (
+            "attempted" if outcome else "open"
+        )
+        zoro_lessons.mark_status(
+            int(lesson_id), new_status,
+            attempted_at=datetime.now(timezone.utc).isoformat(),
+            attempted_branch=branch,
+            attempted_result=outcome,
+        )
+    return final
+
+
+# --- Read side -------------------------------------------------------------
+
+
+def unspoken_report() -> dict | None:
+    """Most recent unspoken report. Morning briefing fetches this."""
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT id, report_date, summary, top_lesson_ids,
+                               needs_resources, episode_stats, spoken, spoken_at
+                        FROM zoro.zoro_daily_reports
+                        WHERE spoken = false
+                        ORDER BY report_date DESC
+                        LIMIT 1;
+                        """
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        d = dict(row)
+                        if isinstance(d.get("report_date"), datetime):
+                            d["report_date"] = d["report_date"].isoformat()
+                        elif hasattr(d.get("report_date"), "isoformat"):
+                            d["report_date"] = d["report_date"].isoformat()
+                        return d
+        except Exception:  # noqa: BLE001
+            pass
+
+    base = zoro_episodes._base()
+    if base is None:
+        return None
+    url, headers = base
+    try:
+        r = httpx.get(
+            f"{url}/rest/v1/zoro_daily_reports"
+            f"?spoken=is.false&order=report_date.desc&limit=1",
+            headers=headers, timeout=_DB_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows = r.json() or []
+        return rows[0] if rows else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def mark_spoken(report_id: int) -> bool:
+    if not report_id:
+        return False
+    if zoro_episodes._pg_url():
+        try:
+            with zoro_episodes._pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE zoro.zoro_daily_reports
+                        SET spoken = true, spoken_at = NOW()
+                        WHERE id = %s;
+                        """,
+                        (int(report_id),),
+                    )
+                    return True
+        except Exception:  # noqa: BLE001
+            pass
+
+    base = zoro_episodes._base()
+    if base is None:
+        return False
+    url, headers = base
+    try:
+        r = httpx.patch(
+            f"{url}/rest/v1/zoro_daily_reports?id=eq.{int(report_id)}",
+            headers={**headers, "Prefer": "return=minimal"},
+            json={
+                "spoken": True,
+                "spoken_at": datetime.now(timezone.utc).isoformat(),
+            },
+            timeout=_DB_TIMEOUT,
+        )
+        r.raise_for_status()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# --- Loop (process entrypoint) --------------------------------------------
+
+
+def _seconds_until_hour(hour: int) -> float:
+    from datetime import timedelta
+    now = datetime.now()
+    target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if target <= now:
+        target = target + timedelta(days=1)
+    return max(60.0, (target - now).total_seconds())
+
+
+def main() -> None:
+    print(
+        f"[reflector] starting; will reflect daily at {_REFLECT_HOUR:02d}:00 local",
+        flush=True,
+    )
+    while True:
+        wait = _seconds_until_hour(_REFLECT_HOUR)
+        print(f"[reflector] sleeping {int(wait)}s until next reflection", flush=True)
+        time.sleep(wait)
+        try:
+            out = run_once()
+            print(f"[reflector] {out}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[reflector] cycle failed: {e}", flush=True)
+        # Sleep an hour past the slot so we don't double-fire if the
+        # cycle finished quickly (sleep loop wakes immediately after).
+        time.sleep(3600)
+
+
+if __name__ == "__main__":
+    main()

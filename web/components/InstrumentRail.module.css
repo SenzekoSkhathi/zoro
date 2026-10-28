@@ -1,0 +1,254 @@
+.rail {
+  position: fixed;
+  left: 52px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  width: 198px;
+  display: flex;
+  flex-direction: column;
+  gap: 1.05rem;
+  padding: 1rem 0.95rem;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  color: #7fb9d0;
+  /* Chamfered instrument shell, matched to the HUD panels. */
+  background: linear-gradient(
+    180deg,
+    rgba(8, 18, 27, 0.42),
+    rgba(6, 13, 20, 0.5)
+  );
+  backdrop-filter: blur(9px) saturate(130%);
+  -webkit-backdrop-filter: blur(9px) saturate(130%);
+  outline: 1px solid rgba(79, 227, 255, 0.14);
+  outline-offset: -1px;
+  clip-path: polygon(
+    10px 0,
+    100% 0,
+    100% calc(100% - 10px),
+    calc(100% - 10px) 100%,
+    0 100%,
+    0 10px
+  );
+  opacity: 0;
+  animation: railIn 0.6s ease 0.2s forwards;
+}
+
+@keyframes railIn {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(79, 227, 255, 0.14);
+  padding-bottom: 0.55rem;
+}
+.kicker {
+  font-size: 0.58rem;
+  letter-spacing: 0.26em;
+  color: #4fe3ff;
+  text-shadow: 0 0 10px rgba(79, 227, 255, 0.45);
+}
+.win {
+  font-size: 0.56rem;
+  letter-spacing: 0.18em;
+  color: #5f93a8;
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.56rem;
+  letter-spacing: 0.24em;
+  color: #5f93a8;
+}
+.dim {
+  color: #3f6678;
+}
+
+/* ── success ring gauge ─────────────────────────────────────────────── */
+.gauge {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  align-self: center;
+}
+.gaugeSvg {
+  width: 100%;
+  height: 100%;
+}
+.gaugeTrack {
+  fill: none;
+  stroke: rgba(79, 227, 255, 0.12);
+  stroke-width: 4;
+}
+.gaugeArc {
+  fill: none;
+  stroke: #4fe3ff;
+  stroke-width: 4;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 4px rgba(79, 227, 255, 0.55));
+  transition: stroke-dasharray 0.4s ease;
+}
+.gaugeLabel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #eafbff;
+  font-variant-numeric: tabular-nums;
+}
+.gaugeLabel i {
+  font-size: 0.6rem;
+  font-style: normal;
+  color: #6fb8d0;
+  margin-left: 1px;
+}
+
+/* ── metric grid ────────────────────────────────────────────────────── */
+.metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem 0.4rem;
+}
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  padding: 0.4rem 0.5rem;
+  background: rgba(79, 227, 255, 0.04);
+  border-left: 1px solid rgba(79, 227, 255, 0.22);
+}
+.metricVal {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #d6f3ff;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.metricVal.warn {
+  color: #ffb648;
+  text-shadow: 0 0 8px rgba(255, 182, 72, 0.4);
+}
+.unit {
+  font-size: 0.55rem;
+  font-style: normal;
+  color: #6fb8d0;
+  margin-left: 1px;
+}
+.metricKey {
+  font-size: 0.5rem;
+  letter-spacing: 0.18em;
+  color: #5f93a8;
+}
+
+/* ── top tools ──────────────────────────────────────────────────────── */
+.tools {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.tool {
+  display: grid;
+  grid-template-columns: 1fr 34px auto;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.56rem;
+}
+.toolName {
+  color: #9fd8ec;
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toolBarTrack {
+  height: 3px;
+  background: rgba(79, 227, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.toolBar {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #2b8fb0, #4fe3ff);
+  border-radius: 2px;
+  transition: width 0.5s ease;
+}
+.toolCount {
+  color: #6fb8d0;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* ── learning ───────────────────────────────────────────────────────── */
+.pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3f6678;
+}
+.pulseOn {
+  background: #ffb648;
+  box-shadow: 0 0 8px rgba(255, 182, 72, 0.7);
+  animation: breathe 2.4s ease-in-out infinite;
+}
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.learnLine {
+  font-size: 0.62rem;
+  color: #9fd8ec;
+}
+.reflection {
+  margin: 0;
+  font-size: 0.58rem;
+  line-height: 1.5;
+  color: #6c97a8;
+  /* Clamp the spoken paragraph to a few lines in the rail. */
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .rail {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail {
+    animation: none;
+    opacity: 1;
+  }
+  .pulseOn {
+    animation: none;
+  }
+}

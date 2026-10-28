@@ -1,0 +1,37 @@
+# Zoro 24/7 Cloud Core — LiveKit Agents voice pipeline
+# Brain: Azure OpenAI GPT-6 | STT: Azure Speech / Deepgram | TTS: Azure Neural / Cartesia | Transport: LiveKit
+livekit-agents[deepgram,anthropic,silero]>=1.0
+livekit-plugins-openai>=1.0
+livekit-plugins-azure==1.5.11
+livekit-plugins-cartesia>=1.0
+azure-cognitiveservices-speech>=1.48.2
+
+# Azure Core Services & Data Layer
+psycopg[binary]>=3.2
+redis>=5.0
+azure-monitor-opentelemetry>=1.8.0
+azure-identity>=1.17.0
+opentelemetry-api==1.39.1
+opentelemetry-sdk==1.39.1
+opentelemetry-semantic-conventions==0.60b1
+
+# Transitive via livekit-agents
+livekit-blingfire>=1.1.0
+python-dotenv>=1.0
+
+# LLM & HTTP clients
+anthropic>=0.102.0
+httpx>=0.28
+
+# Core async & utilities
+websockets>=12
+numpy>=2.0
+Pillow>=10.0
+mss>=9.0.0
+
+# Integrations
+google-api-python-client>=2.0
+google-auth>=2.0
+spotipy>=2.24
+youtube-transcript-api>=0.6
+
