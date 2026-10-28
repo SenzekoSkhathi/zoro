@@ -206,8 +206,10 @@ export function Orb({
   const onStartDragRef = useRef(onStartDrag);
   onStartDragRef.current = onStartDrag;
 
-  // Double-click + hold/move vs single-click state refs
+  // Double-click + hold/move & press-drag vs single-click state refs
   const lastPointerDownRef = useRef<number>(0);
+  const pointerDownPosRef = useRef<{ x: number; y: number } | null>(null);
+  const lastDragStartRef = useRef<number>(0);
   const singleClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressNextClickUntilRef = useRef<number>(0);
   const dragCleanupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -793,9 +795,27 @@ export function Orb({
   ]);
 
   useEffect(() => {
-    const w = window as unknown as { __zoroEndDrag?: () => void };
+    const w = window as unknown as {
+      __zoroStartDrag?: () => void;
+      __zoroEndDrag?: () => void;
+    };
+    w.__zoroStartDrag = () => {
+      if (singleClickTimerRef.current) {
+        clearTimeout(singleClickTimerRef.current);
+        singleClickTimerRef.current = null;
+      }
+      suppressNextClickUntilRef.current = performance.now() + 900;
+      if (wrapperRef.current) {
+        wrapperRef.current.dataset.dragging = "true";
+      }
+    };
     w.__zoroEndDrag = () => {
-      suppressNextClickUntilRef.current = performance.now() + 280;
+      pointerDownPosRef.current = null;
+      if (singleClickTimerRef.current) {
+        clearTimeout(singleClickTimerRef.current);
+        singleClickTimerRef.current = null;
+      }
+      suppressNextClickUntilRef.current = performance.now() + 380;
       if (dragCleanupTimerRef.current) {
         clearTimeout(dragCleanupTimerRef.current);
         dragCleanupTimerRef.current = null;
@@ -805,6 +825,7 @@ export function Orb({
       }
     };
     return () => {
+      delete w.__zoroStartDrag;
       delete w.__zoroEndDrag;
       if (singleClickTimerRef.current) {
         clearTimeout(singleClickTimerRef.current);
@@ -820,7 +841,14 @@ export function Orb({
       clearTimeout(singleClickTimerRef.current);
       singleClickTimerRef.current = null;
     }
-    suppressNextClickUntilRef.current = performance.now() + 550;
+    const now = performance.now();
+    // Debounce duplicate drag triggers (e.g. pointerdown + dblclick on the same gesture)
+    // so we don't toggle an active drag off in Rust.
+    if (now - lastDragStartRef.current < 260) {
+      return;
+    }
+    lastDragStartRef.current = now;
+    suppressNextClickUntilRef.current = now + 800;
     if (wrapperRef.current) {
       wrapperRef.current.dataset.dragging = "true";
     }
@@ -840,11 +868,28 @@ export function Orb({
     const now = performance.now();
     const delta = now - lastPointerDownRef.current;
     lastPointerDownRef.current = now;
+    pointerDownPosRef.current = { x: e.clientX, y: e.clientY };
 
-    if (delta > 0 && delta < 360) {
+    if (delta > 0 && delta < 420) {
       // Double-click detected -> cancel single-click and start native window drag!
+      pointerDownPosRef.current = null;
       beginNativeDrag();
     }
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if ((e.buttons & 1) !== 1 || !pointerDownPosRef.current) return;
+    const dx = e.clientX - pointerDownPosRef.current.x;
+    const dy = e.clientY - pointerDownPosRef.current.y;
+    if (Math.hypot(dx, dy) > 5) {
+      // User pressed and moved the mouse -> start native window drag!
+      pointerDownPosRef.current = null;
+      beginNativeDrag();
+    }
+  };
+
+  const handlePointerUp = () => {
+    pointerDownPosRef.current = null;
   };
 
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -865,7 +910,7 @@ export function Orb({
       if (performance.now() >= suppressNextClickUntilRef.current) {
         onClickRef.current?.();
       }
-    }, 170);
+    }, 220);
   };
 
   const style = {
@@ -884,6 +929,8 @@ export function Orb({
         data-reactive={listenToMic || energy !== undefined ? "true" : undefined}
         style={style}
         onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
         onDoubleClick={() => {
           beginNativeDrag();
         }}

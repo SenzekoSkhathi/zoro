@@ -48,17 +48,6 @@ async function callTauri<T = unknown>(
         if (cmd === "start_drag") {
           return await invoke("plugin:window|start_dragging", { label: "main" });
         }
-        if (cmd === "toggle_always_on_top") {
-          const cur = await invoke("plugin:window|is_always_on_top", {
-            label: "main",
-          });
-          const next = !cur;
-          await invoke("plugin:window|set_always_on_top", {
-            label: "main",
-            value: next,
-          });
-          return next as T;
-        }
         if (cmd === "get_always_on_top") {
           return await invoke("plugin:window|is_always_on_top", {
             label: "main",

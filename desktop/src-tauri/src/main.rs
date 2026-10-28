@@ -3,9 +3,11 @@
 // A thin native window around the hosted Zoro UI. Adds the desktop-native
 // behaviour the browser can't: a system-tray presence, launch-at-login,
 // close-to-tray, global Alt+F5 Always-on-Top pinning, native OS cursor-tracked
-// dragging, and "wake-summon".
+// dragging (both double-click + move and click + drag), and "wake-summon".
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{
@@ -17,6 +19,7 @@ use tauri::{
 static IS_DRAGGING: AtomicBool = AtomicBool::new(false);
 static IS_PINNED: AtomicBool = AtomicBool::new(false);
 static LAST_PIN_TOGGLE_MS: AtomicU64 = AtomicU64::new(0);
+static DRAG_START_MS: AtomicU64 = AtomicU64::new(0);
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -25,22 +28,56 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn log_desktop(msg: &str) {
+    let path = std::path::Path::new("C:\\Users\\senze\\zoro\\data\\desktop.log");
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "[{}] {}", now_ms(), msg);
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod win32 {
     use std::ffi::c_void;
 
     #[repr(C)]
-    #[derive(Copy, Clone, Default)]
+    #[derive(Copy, Clone, Default, Debug)]
     pub struct Point {
         pub x: i32,
         pub y: i32,
     }
 
+    #[repr(C)]
+    #[derive(Copy, Clone, Default, Debug)]
+    pub struct Rect {
+        pub left: i32,
+        pub top: i32,
+        pub right: i32,
+        pub bottom: i32,
+    }
+
+    #[repr(C)]
+    pub struct Msg {
+        pub hwnd: *mut c_void,
+        pub message: u32,
+        pub w_param: usize,
+        pub l_param: isize,
+        pub time: u32,
+        pub pt: Point,
+    }
+
     pub const VK_LBUTTON: i32 = 0x01;
     pub const VK_ESCAPE: i32 = 0x1B;
     pub const VK_MENU: i32 = 0x12; // Alt key
+    pub const VK_LMENU: i32 = 0xA4;
+    pub const VK_RMENU: i32 = 0xA5;
     pub const VK_F4: i32 = 0x73;
     pub const VK_F5: i32 = 0x74;
+
+    pub const MOD_ALT: u32 = 0x0001;
+    pub const MOD_NOREPEAT: u32 = 0x4000;
+    pub const WM_HOTKEY: u32 = 0x0312;
+    pub const PM_REMOVE: u32 = 0x0001;
+    pub const GA_ROOT: u32 = 2;
 
     pub const HWND_TOP: isize = 0;
     pub const HWND_BOTTOM: isize = 1;
@@ -49,6 +86,7 @@ mod win32 {
 
     pub const SWP_NOSIZE: u32 = 0x0001;
     pub const SWP_NOMOVE: u32 = 0x0002;
+    pub const SWP_NOZORDER: u32 = 0x0004;
     pub const SWP_NOACTIVATE: u32 = 0x0010;
     pub const SWP_SHOWWINDOW: u32 = 0x0040;
 
@@ -66,10 +104,30 @@ mod win32 {
             u_flags: u32,
         ) -> i32;
         pub fn GetForegroundWindow() -> *mut c_void;
+        pub fn GetWindowRect(hwnd: *mut c_void, lp_rect: *mut Rect) -> i32;
+        pub fn WindowFromPoint(point: Point) -> *mut c_void;
+        pub fn GetAncestor(hwnd: *mut c_void, ga_flags: u32) -> *mut c_void;
+        pub fn RegisterHotKey(
+            hwnd: *mut c_void,
+            id: i32,
+            fs_modifiers: u32,
+            vk: u32,
+        ) -> i32;
+        pub fn PeekMessageW(
+            lp_msg: *mut Msg,
+            hwnd: *mut c_void,
+            w_msg_filter_min: u32,
+            w_msg_filter_max: u32,
+            w_remove_msg: u32,
+        ) -> i32;
     }
 
     pub fn is_key_down(vk: i32) -> bool {
         unsafe { (GetAsyncKeyState(vk) as u16 & 0x8000) != 0 }
+    }
+
+    pub fn is_alt_down() -> bool {
+        is_key_down(VK_MENU) || is_key_down(VK_LMENU) || is_key_down(VK_RMENU)
     }
 
     pub fn cursor_pos() -> Option<Point> {
@@ -81,7 +139,63 @@ mod win32 {
         }
     }
 
+    pub fn window_rect(hwnd: *mut c_void) -> Option<Rect> {
+        let mut r = Rect::default();
+        if unsafe { GetWindowRect(hwnd, &mut r) } != 0 {
+            Some(r)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_cursor_on_our_orb(hwnd: *mut c_void, pt: Point, scale: f64) -> bool {
+        if hwnd.is_null() {
+            return false;
+        }
+        unsafe {
+            let hit = WindowFromPoint(pt);
+            if hit.is_null() {
+                return false;
+            }
+            let root = GetAncestor(hit, GA_ROOT);
+            if root != hwnd && hit != hwnd {
+                return false;
+            }
+            if let Some(r) = window_rect(hwnd) {
+                let orb_zone_height = (240.0 * scale) as i32;
+                // Only treat the bottom 240px (where the Orb sits) as draggable so
+                // any upper cards/widgets remain clickable without dragging the window.
+                pt.x >= r.left
+                    && pt.x <= r.right
+                    && pt.y >= (r.bottom - orb_zone_height)
+                    && pt.y <= r.bottom
+            } else {
+                false
+            }
+        }
+    }
+
+    pub fn move_window_fast(hwnd: *mut c_void, x: i32, y: i32) {
+        if hwnd.is_null() {
+            return;
+        }
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                0,
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
     pub fn apply_topmost(hwnd: *mut c_void, pinned: bool) {
+        if hwnd.is_null() {
+            return;
+        }
         unsafe {
             if pinned {
                 SetWindowPos(
@@ -104,7 +218,12 @@ mod win32 {
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                 );
                 let fg = GetForegroundWindow();
-                if !fg.is_null() && fg != hwnd {
+                let fg_root = if !fg.is_null() {
+                    GetAncestor(fg, GA_ROOT)
+                } else {
+                    std::ptr::null_mut()
+                };
+                if !fg.is_null() && fg != hwnd && fg_root != hwnd {
                     // Drop behind active windows immediately so unpinning is visually instant
                     SetWindowPos(
                         hwnd,
@@ -131,46 +250,101 @@ mod win32 {
     }
 }
 
-#[tauri::command]
-fn start_drag(window: WebviewWindow) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
+#[cfg(target_os = "windows")]
+fn run_drag_session(window: WebviewWindow, start_cursor: win32::Point, is_double_click: bool) {
+    let now = now_ms();
+    if IS_DRAGGING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
     {
-        if IS_DRAGGING
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            // Already in a drag session -> second click drops the orb
+        // Ignore duplicate start_drag triggers within 260ms of starting a drag
+        let started = DRAG_START_MS.load(Ordering::SeqCst);
+        if now.saturating_sub(started) >= 260 {
             IS_DRAGGING.store(false, Ordering::SeqCst);
-            return Ok(());
+        }
+        return;
+    }
+    DRAG_START_MS.store(now, Ordering::SeqCst);
+
+    let hwnd_usize = window
+        .hwnd()
+        .map(|h| h.0 as usize)
+        .unwrap_or(0);
+    let start_win = match window.outer_position() {
+        Ok(pos) => pos,
+        Err(_) => {
+            IS_DRAGGING.store(false, Ordering::SeqCst);
+            return;
+        }
+    };
+
+    log_desktop(&format!(
+        "drag started (double_click={}) at cursor=({}, {}) win=({}, {})",
+        is_double_click, start_cursor.x, start_cursor.y, start_win.x, start_win.y
+    ));
+
+    let _ = window.eval("window.__zoroStartDrag && window.__zoroStartDrag();");
+
+    std::thread::spawn(move || {
+        let hwnd = hwnd_usize as *mut std::ffi::c_void;
+        let t0 = now_ms();
+        let mut max_dist_while_held: f64 = 0.0;
+
+        // Phase 1: While the initial mouse button press is still held down,
+        // move the window with the cursor and measure how far the user dragged.
+        while IS_DRAGGING.load(Ordering::SeqCst) && win32::is_key_down(win32::VK_LBUTTON) {
+            if win32::is_key_down(win32::VK_ESCAPE) {
+                IS_DRAGGING.store(false, Ordering::SeqCst);
+                break;
+            }
+            if let Some(cur) = win32::cursor_pos() {
+                let dx = cur.x - start_cursor.x;
+                let dy = cur.y - start_cursor.y;
+                let dist = ((dx * dx + dy * dy) as f64).sqrt();
+                if dist > max_dist_while_held {
+                    max_dist_while_held = dist;
+                }
+                if hwnd != std::ptr::null_mut() {
+                    win32::move_window_fast(hwnd, start_win.x + dx, start_win.y + dy);
+                } else {
+                    let _ = window.set_position(tauri::Position::Physical(
+                        tauri::PhysicalPosition {
+                            x: start_win.x + dx,
+                            y: start_win.y + dy,
+                        },
+                    ));
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(6));
         }
 
-        let start_cursor = match win32::cursor_pos() {
-            Some(pt) => pt,
-            None => {
-                IS_DRAGGING.store(false, Ordering::SeqCst);
-                return window.start_dragging().map_err(|e| e.to_string());
-            }
-        };
-        let start_win = match window.outer_position() {
-            Ok(pos) => pos,
-            Err(e) => {
-                IS_DRAGGING.store(false, Ordering::SeqCst);
-                return Err(e.to_string());
-            }
-        };
+        let held_ms = now_ms().saturating_sub(t0);
 
-        std::thread::spawn(move || {
-            // Brief 65ms window to detect whether the user is holding the mouse button
-            // down (hold-to-drag) OR released the second click of a double-click
-            // (float-and-move until next click).
-            for _ in 0..13 {
-                if !IS_DRAGGING.load(Ordering::SeqCst) {
+        // Phase 2: If this was a tap-tap double-click (the user released the 2nd click
+        // quickly without having dragged > 12px yet), keep floating the Orb with the
+        // mouse cursor until the user clicks once (or presses Esc) to place it!
+        if IS_DRAGGING.load(Ordering::SeqCst)
+            && is_double_click
+            && max_dist_while_held <= 12.0
+            && held_ms <= 280
+        {
+            while IS_DRAGGING.load(Ordering::SeqCst) {
+                if win32::is_key_down(win32::VK_ESCAPE) {
+                    break;
+                }
+                if win32::is_key_down(win32::VK_LBUTTON) {
+                    // User clicked to drop the Orb -> wait for release so it doesn't wake Zoro
+                    while win32::is_key_down(win32::VK_LBUTTON) {
+                        std::thread::sleep(std::time::Duration::from_millis(8));
+                    }
                     break;
                 }
                 if let Some(cur) = win32::cursor_pos() {
                     let dx = cur.x - start_cursor.x;
                     let dy = cur.y - start_cursor.y;
-                    if dx != 0 || dy != 0 {
+                    if hwnd != std::ptr::null_mut() {
+                        win32::move_window_fast(hwnd, start_win.x + dx, start_win.y + dy);
+                    } else {
                         let _ = window.set_position(tauri::Position::Physical(
                             tauri::PhysicalPosition {
                                 x: start_win.x + dx,
@@ -179,55 +353,25 @@ fn start_drag(window: WebviewWindow) -> Result<(), String> {
                         ));
                     }
                 }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-
-            let hold_mode = win32::is_key_down(win32::VK_LBUTTON);
-            let mut saw_release = !hold_mode;
-
-            while IS_DRAGGING.load(Ordering::SeqCst) {
-                if win32::is_key_down(win32::VK_ESCAPE) {
-                    break;
-                }
-
-                let lbutton = win32::is_key_down(win32::VK_LBUTTON);
-                if hold_mode {
-                    // Hold-and-drag: finish as soon as left mouse button is released
-                    if !lbutton {
-                        break;
-                    }
-                } else {
-                    // Double-click-and-move: follow cursor until the user clicks to drop
-                    if !lbutton {
-                        saw_release = true;
-                    } else if saw_release {
-                        // Wait for release of the drop click so it doesn't trigger a call
-                        while win32::is_key_down(win32::VK_LBUTTON) {
-                            std::thread::sleep(std::time::Duration::from_millis(8));
-                        }
-                        break;
-                    }
-                }
-
-                if let Some(cur) = win32::cursor_pos() {
-                    let dx = cur.x - start_cursor.x;
-                    let dy = cur.y - start_cursor.y;
-                    let _ = window.set_position(tauri::Position::Physical(
-                        tauri::PhysicalPosition {
-                            x: start_win.x + dx,
-                            y: start_win.y + dy,
-                        },
-                    ));
-                }
-
                 std::thread::sleep(std::time::Duration::from_millis(6));
             }
+        }
 
-            IS_DRAGGING.store(false, Ordering::SeqCst);
-            let _ = window.eval("window.__zoroEndDrag && window.__zoroEndDrag();");
-        });
+        IS_DRAGGING.store(false, Ordering::SeqCst);
+        let _ = window.eval("window.__zoroEndDrag && window.__zoroEndDrag();");
+        log_desktop("drag finished");
+    });
+}
 
-        Ok(())
+#[tauri::command]
+fn start_drag(window: WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(pt) = win32::cursor_pos() {
+            run_drag_session(window, pt, true);
+            return Ok(());
+        }
+        window.start_dragging().map_err(|e| e.to_string())
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -238,15 +382,21 @@ fn start_drag(window: WebviewWindow) -> Result<(), String> {
 
 fn apply_pin_state(win: &WebviewWindow, next: bool) -> Result<bool, String> {
     IS_PINNED.store(next, Ordering::SeqCst);
-    if next {
-        let _ = win.show();
-        let _ = win.unminimize();
-    }
-    let _ = win.set_always_on_top(next);
-    #[cfg(target_os = "windows")]
-    if let Ok(hwnd) = win.hwnd() {
-        win32::apply_topmost(hwnd.0 as *mut std::ffi::c_void, next);
-    }
+    log_desktop(&format!("apply_pin_state -> {}", next));
+
+    let win_clone = win.clone();
+    let _ = win.run_on_main_thread(move || {
+        if next {
+            let _ = win_clone.show();
+            let _ = win_clone.unminimize();
+        }
+        let _ = win_clone.set_always_on_top(next);
+        #[cfg(target_os = "windows")]
+        if let Ok(hwnd) = win_clone.hwnd() {
+            win32::apply_topmost(hwnd.0 as *mut std::ffi::c_void, next);
+        }
+    });
+
     let _ = win.eval(&format!(
         "window.__zoroSetPinned && window.__zoroSetPinned({});",
         next
@@ -403,20 +553,116 @@ fn toggle_pin_state(app: &tauri::AppHandle) {
 }
 
 #[cfg(target_os = "windows")]
-fn spawn_global_hotkey_listener(app: tauri::AppHandle) {
-    std::thread::spawn(move || {
-        let mut prev_alt_f5 = false;
-        loop {
-            let alt_down = win32::is_key_down(win32::VK_MENU);
-            let f5_down = win32::is_key_down(win32::VK_F5);
-            let alt_f5 = alt_down && f5_down;
+fn spawn_native_input_engine(app: tauri::AppHandle) {
+    const HOTKEY_PIN_ID: i32 = 1;
 
+    std::thread::spawn(move || {
+        // 1. Register kernel-level global hotkey for Alt+F5 so it works even when
+        //    other apps or elevated windows are in the foreground.
+        let hk_ok = unsafe {
+            win32::RegisterHotKey(
+                std::ptr::null_mut(),
+                HOTKEY_PIN_ID,
+                win32::MOD_ALT | win32::MOD_NOREPEAT,
+                win32::VK_F5 as u32,
+            )
+        };
+        log_desktop(&format!("RegisterHotKey(Alt+F5) result={}", hk_ok));
+
+        let mut prev_alt_f5 = false;
+        let mut prev_lbutton = false;
+        let mut press_started_on_orb = false;
+        let mut press_start_pt = win32::Point::default();
+        let mut last_orb_press_ms: u64 = 0;
+
+        let (hwnd_usize, scale) = if let Some(win) = app.get_webview_window("main") {
+            let h = win.hwnd().map(|v| v.0 as usize).unwrap_or(0);
+            let s = win
+                .primary_monitor()
+                .ok()
+                .flatten()
+                .map(|m| m.scale_factor())
+                .unwrap_or(1.0);
+            (h, s)
+        } else {
+            (0, 1.0)
+        };
+        let hwnd = hwnd_usize as *mut std::ffi::c_void;
+
+        loop {
+            // A. Check kernel WM_HOTKEY messages
+            unsafe {
+                let mut msg: win32::Msg = std::mem::zeroed();
+                while win32::PeekMessageW(
+                    &mut msg,
+                    std::ptr::null_mut(),
+                    0,
+                    0,
+                    win32::PM_REMOVE,
+                ) != 0
+                {
+                    if msg.message == win32::WM_HOTKEY
+                        && msg.w_param == HOTKEY_PIN_ID as usize
+                    {
+                        toggle_pin_state(&app);
+                    }
+                }
+            }
+
+            // B. Check GetAsyncKeyState for Alt+F5 (fallback if another process bound WM_HOTKEY)
+            let alt_f5 = win32::is_alt_down() && win32::is_key_down(win32::VK_F5);
             if alt_f5 && !prev_alt_f5 {
                 toggle_pin_state(&app);
             }
             prev_alt_f5 = alt_f5;
 
-            std::thread::sleep(std::time::Duration::from_millis(25));
+            // C. Native OS-level Orb Mouse Dragging (both Click+Drag and Double-Click+Move)
+            if !IS_DRAGGING.load(Ordering::SeqCst) {
+                let lbutton = win32::is_key_down(win32::VK_LBUTTON);
+                if lbutton && !prev_lbutton {
+                    // Rising edge of left mouse button
+                    if let Some(pt) = win32::cursor_pos() {
+                        if win32::is_cursor_on_our_orb(hwnd, pt, scale) {
+                            let now = now_ms();
+                            let delta = now.saturating_sub(last_orb_press_ms);
+                            last_orb_press_ms = now;
+                            press_started_on_orb = true;
+                            press_start_pt = pt;
+
+                            if delta > 0 && delta < 430 {
+                                // Double-click on the Orb detected natively -> start drag!
+                                press_started_on_orb = false;
+                                if let Some(win) = app.get_webview_window("main") {
+                                    run_drag_session(win, pt, true);
+                                }
+                            }
+                        } else {
+                            press_started_on_orb = false;
+                        }
+                    }
+                } else if lbutton && prev_lbutton && press_started_on_orb {
+                    // Mouse button held down after pressing on the Orb -> check for >5px drag
+                    if let Some(pt) = win32::cursor_pos() {
+                        let dx = pt.x - press_start_pt.x;
+                        let dy = pt.y - press_start_pt.y;
+                        if (dx * dx + dy * dy) > 25 {
+                            press_started_on_orb = false;
+                            last_orb_press_ms = 0;
+                            if let Some(win) = app.get_webview_window("main") {
+                                run_drag_session(win, press_start_pt, false);
+                            }
+                        }
+                    }
+                } else if !lbutton {
+                    press_started_on_orb = false;
+                }
+                prev_lbutton = lbutton;
+            } else {
+                prev_lbutton = win32::is_key_down(win32::VK_LBUTTON);
+                press_started_on_orb = false;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
     });
 }
@@ -463,6 +709,7 @@ fn main() {
             hide_window
         ])
         .setup(|app| {
+            log_desktop("Zoro desktop setup starting");
             {
                 use tauri_plugin_autostart::ManagerExt;
                 let _ = app.autolaunch().enable();
@@ -584,7 +831,7 @@ fn main() {
             }
 
             #[cfg(target_os = "windows")]
-            spawn_global_hotkey_listener(app.handle().clone());
+            spawn_native_input_engine(app.handle().clone());
 
             Ok(())
         })

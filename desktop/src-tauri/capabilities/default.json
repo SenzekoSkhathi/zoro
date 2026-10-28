@@ -5,10 +5,19 @@
   "windows": ["main"],
   "remote": {
     "urls": [
+      "https://zoro-web.greentree-c12de99e.southafricanorth.azurecontainerapps.io/*",
+      "https://zoro-web.greentree-c12de99e.southafricanorth.azurecontainerapps.io/*?*",
+      "https://zoro-web.greentree-c12de99e.southafricanorth.azurecontainerapps.io?*",
+      "https://zoro-web.greentree-c12de99e.southafricanorth.azurecontainerapps.io",
+      "https://*.*.*.azurecontainerapps.io/*",
+      "https://*.*.*.azurecontainerapps.io/*?*",
       "https://*.azurecontainerapps.io/*",
+      "https://*.azurecontainerapps.io/*?*",
       "https://*.azurecontainerapps.io",
       "https://*.vercel.app/*",
-      "http://localhost:3000/*"
+      "https://*.vercel.app/*?*",
+      "http://localhost:3000/*",
+      "http://localhost:3000/*?*"
     ]
   },
   "permissions": [
@@ -21,12 +30,6 @@
     "core:window:allow-unminimize",
     "core:window:allow-set-focus",
     "core:window:allow-set-size",
-    "core:window:allow-set-position",
-    "allow-start-drag",
-    "allow-toggle-always-on-top",
-    "allow-set-always-on-top",
-    "allow-get-always-on-top",
-    "allow-set-window-size",
-    "allow-hide-window"
+    "core:window:allow-set-position"
   ]
 }
