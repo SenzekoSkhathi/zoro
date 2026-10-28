@@ -7,7 +7,7 @@ import {
   useDataChannel,
 } from "@livekit/components-react";
 import { HudPanel } from "./HudPanel";
-import { useWidgetLimit } from "./WidgetLimit";
+import { useWidgetLimit, WidgetSlot } from "./WidgetLimit";
 import styles from "./Transcript.module.css";
 
 // Same channel ZoroDisplay listens on. The agent's show_chat_history tool
@@ -32,7 +32,7 @@ export function Transcript({
   const endRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
 
-  // Chat counts toward the shared two-widget max alongside the grid widgets.
+  // Chat counts as a small widget toward the shared 1 big + 2 small max.
   const { allowed, open, close } = useWidgetLimit();
 
   const { message } = useDataChannel(DISPLAY_TOPIC);
@@ -63,7 +63,7 @@ export function Transcript({
   }, [message, open, close]);
 
   // The panel is on screen only while it's both asked-for and still permitted
-  // by the shared limiter — opening a third surface evicts "chat" from
+  // by the shared limiter — opening a third small surface evicts "chat" from
   // `allowed`, which hides this without touching `visible`.
   const shown = visible && allowed.has("chat");
 
@@ -94,38 +94,40 @@ export function Transcript({
   if (!shown) return null;
 
   return (
-    <HudPanel
-      kind="CHAT LOG"
-      meta={`${lines.length} LINE${lines.length === 1 ? "" : "S"}`}
-      ariaLabel="Chat history"
-      role="log"
-      headerExtra={
-        <button
-          className={styles.close}
-          onClick={() => {
-            setVisible(false);
-            close("chat");
-          }}
-          aria-label="Close chat history"
-        >
-          ✕
-        </button>
-      }
-    >
-      {lines.length === 0 ? (
-        <p className={styles.empty}>No conversation yet.</p>
-      ) : (
-        lines.map((l) => (
-          <p
-            key={l.id}
-            className={`${styles.line} ${l.mine ? styles.you : styles.zoro}`}
+    <WidgetSlot id="chat">
+      <HudPanel
+        kind="CHAT LOG"
+        meta={`${lines.length} LINE${lines.length === 1 ? "" : "S"}`}
+        ariaLabel="Chat history"
+        role="log"
+        headerExtra={
+          <button
+            className={styles.close}
+            onClick={() => {
+              setVisible(false);
+              close("chat");
+            }}
+            aria-label="Close chat history"
           >
-            <span className={styles.who}>{l.mine ? "You" : "Zoro"}</span>
-            <span className={styles.text}>{l.text}</span>
-          </p>
-        ))
-      )}
-      <div ref={endRef} />
-    </HudPanel>
+            ✕
+          </button>
+        }
+      >
+        {lines.length === 0 ? (
+          <p className={styles.empty}>No conversation yet.</p>
+        ) : (
+          lines.map((l) => (
+            <p
+              key={l.id}
+              className={`${styles.line} ${l.mine ? styles.you : styles.zoro}`}
+            >
+              <span className={styles.who}>{l.mine ? "You" : "Zoro"}</span>
+              <span className={styles.text}>{l.text}</span>
+            </p>
+          ))
+        )}
+        <div ref={endRef} />
+      </HudPanel>
+    </WidgetSlot>
   );
 }

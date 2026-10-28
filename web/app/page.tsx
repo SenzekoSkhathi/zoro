@@ -15,7 +15,7 @@ import { useTelemetry } from "@/hooks/useTelemetry";
 import { Orb, type OrbMode } from "@/components/Orb";
 import { ZoroDisplay } from "@/components/ZoroDisplay";
 import { Transcript } from "@/components/Transcript";
-import { WidgetLimitProvider } from "@/components/WidgetLimit";
+import { WidgetLimitProvider, WidgetStage } from "@/components/WidgetLimit";
 import { InstrumentRail } from "@/components/InstrumentRail";
 import { ToolTicker } from "@/components/ToolTicker";
 import { LoginGate } from "@/components/LoginGate";
@@ -276,16 +276,96 @@ export default function Home() {
   // True while Zoro has content on screen; docks the orb to the corner
   // and projects the beam, then clears back to the natural state.
   const [contentShown, setContentShown] = useState(false);
+  // In the desktop shell, when widgets open we expand the window to cover the
+  // screen work area so widgets sit at the centre of the screen, and pin the
+  // orb to the saved compact rect `[x, y, w, h]` so it stays where the user
+  // placed it.
+  const [orbPinRect, setOrbPinRect] = useState<
+    [number, number, number, number] | null
+  >(null);
 
   // Dynamic window sizing for the desktop shell:
-  // Compact 240x240 for Orb-only mode; expands to 500x860 when cards/chat/login open.
+  // - Widgets open (`contentShown`): full-work-area click-through overlay with
+  //   widgets centred on the screen and the orb pinned in place.
+  // - Login gate (`authed === false`): 500x860 box.
+  // - Idle Orb-only: compact 240x240.
   useEffect(() => {
     if (!isOverlay) return;
-    const needsExpanded = contentShown || authed === false;
-    const targetW = needsExpanded ? 500 : 240;
-    const targetH = needsExpanded ? 860 : 240;
-    void callTauri("set_window_size", { width: targetW, height: targetH });
+    let cancelled = false;
+    (async () => {
+      if (contentShown) {
+        const rect = await callTauri<[number, number, number, number]>(
+          "set_overlay_mode",
+          { expanded: true },
+        );
+        if (cancelled) return;
+        if (Array.isArray(rect) && rect.length === 4) {
+          setOrbPinRect(rect);
+        } else {
+          // Fallback if running an older desktop binary without set_overlay_mode
+          setOrbPinRect(null);
+          void callTauri("set_window_size", { width: 500, height: 860 });
+        }
+      } else {
+        setOrbPinRect(null);
+        await callTauri("set_overlay_mode", { expanded: false });
+        if (cancelled) return;
+        const targetW = authed === false ? 500 : 240;
+        const targetH = authed === false ? 860 : 240;
+        void callTauri("set_window_size", { width: targetW, height: targetH });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [isOverlay, contentShown, authed]);
+
+  // While the desktop overlay covers the work area, report the bounding boxes
+  // of every interactive element (`[data-zoro-hit]`: open widgets + the orb)
+  // so the Rust shell makes everything else click-through to the desktop.
+  useEffect(() => {
+    if (!isOverlay || !contentShown) return;
+    let raf = 0;
+    const sync = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const els = document.querySelectorAll<HTMLElement>("[data-zoro-hit]");
+        const regions: [number, number, number, number][] = [];
+        els.forEach((el) => {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            regions.push([r.left, r.top, r.width, r.height]);
+          }
+        });
+        void callTauri("set_hit_regions", { regions });
+      });
+    };
+    sync();
+    const t1 = setTimeout(sync, 120);
+    const t2 = setTimeout(sync, 600);
+    const mo = new MutationObserver(sync);
+    mo.observe(document.body, { childList: true, subtree: true });
+    const ro = new ResizeObserver(sync);
+    const bindRo = () => {
+      ro.disconnect();
+      document
+        .querySelectorAll<HTMLElement>("[data-zoro-hit]")
+        .forEach((el) => ro.observe(el));
+    };
+    bindRo();
+    const moBind = new MutationObserver(bindRo);
+    moBind.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener("resize", sync);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      mo.disconnect();
+      moBind.disconnect();
+      ro.disconnect();
+      window.removeEventListener("resize", sync);
+    };
+  }, [isOverlay, contentShown, orbPinRect]);
   // Briefly suppress wake-word re-activation right after a session ends,
   // so residual TTS audio bleeding into the mic can't bounce her back on.
   const [wakeGate, setWakeGate] = useState(false);
@@ -479,6 +559,7 @@ export default function Home() {
             onDeactivate={deactivate}
             onContentChange={setContentShown}
             isOverlay={isOverlay}
+            orbPinRect={orbPinRect}
             alwaysOnTop={alwaysOnTop}
             onStartDrag={handleStartDrag}
           />
@@ -505,6 +586,7 @@ function ZoroConversation({
   onDeactivate,
   onContentChange,
   isOverlay = false,
+  orbPinRect = null,
   alwaysOnTop = false,
   onStartDrag,
 }: {
@@ -513,6 +595,7 @@ function ZoroConversation({
   onDeactivate: () => void;
   onContentChange: (shown: boolean) => void;
   isOverlay?: boolean;
+  orbPinRect?: [number, number, number, number] | null;
   alwaysOnTop?: boolean;
   onStartDrag?: () => void;
 }) {
@@ -642,10 +725,30 @@ function ZoroConversation({
         />
       )}
       <WidgetLimitProvider>
-        <ZoroDisplay onActiveChange={setCardActive} />
-        <Transcript onActiveChange={setChatActive} />
+        <WidgetStage expanded={isOverlay && contentShown}>
+          <ZoroDisplay onActiveChange={setCardActive} />
+          <Transcript onActiveChange={setChatActive} />
+        </WidgetStage>
       </WidgetLimitProvider>
-      <div className={isOverlay ? styles.overlayContainer : undefined}>
+      <div
+        className={isOverlay ? styles.overlayContainer : undefined}
+        data-zoro-hit=""
+        style={
+          isOverlay && contentShown && orbPinRect
+            ? {
+                position: "fixed",
+                left: orbPinRect[0],
+                top: orbPinRect[1],
+                width: orbPinRect[2],
+                height: orbPinRect[3],
+                justifyContent: "flex-end",
+                alignItems: "flex-end",
+                padding: "0.75rem 1rem 1.25rem",
+                zIndex: 20,
+              }
+            : undefined
+        }
+      >
         <Orb
           mode={faceMode}
           energy={energy}

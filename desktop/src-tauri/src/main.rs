@@ -9,6 +9,7 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -20,6 +21,18 @@ static IS_DRAGGING: AtomicBool = AtomicBool::new(false);
 static IS_PINNED: AtomicBool = AtomicBool::new(false);
 static LAST_PIN_TOGGLE_MS: AtomicU64 = AtomicU64::new(0);
 static DRAG_START_MS: AtomicU64 = AtomicU64::new(0);
+
+/// True while the window is blown up to cover the monitor work area so
+/// widgets can render centre-screen (see `set_overlay_mode`).
+static OVERLAY_EXPANDED: AtomicBool = AtomicBool::new(false);
+/// Whether the window currently passes mouse input through to the desktop.
+static IGNORING_CURSOR: AtomicBool = AtomicBool::new(false);
+/// Compact (orb-only) window rect saved before expanding: x, y, w, h (physical).
+static SAVED_COMPACT_RECT: Mutex<Option<(i32, i32, u32, u32)>> = Mutex::new(None);
+/// Interactive regions (widgets + orb) reported by the page, in logical px
+/// relative to the window's client area: x, y, w, h. Outside of these the
+/// expanded overlay is click-through.
+static HIT_REGIONS: Mutex<Vec<(f64, f64, f64, f64)>> = Mutex::new(Vec::new());
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -428,6 +441,11 @@ fn get_always_on_top(_window: WebviewWindow) -> Result<bool, String> {
 
 #[tauri::command]
 fn set_window_size(window: WebviewWindow, width: f64, height: f64) -> Result<(), String> {
+    // The expanded widget overlay owns the window geometry; ignore stale
+    // compact/expanded size requests until it collapses again.
+    if OVERLAY_EXPANDED.load(Ordering::SeqCst) {
+        return Ok(());
+    }
     if let Ok(Some(monitor)) = window.primary_monitor() {
         let scale = monitor.scale_factor();
         let screen_size = monitor.size();
@@ -471,6 +489,86 @@ fn set_window_size(window: WebviewWindow, width: f64, height: f64) -> Result<(),
 #[tauri::command]
 fn hide_window(window: WebviewWindow) -> Result<(), String> {
     window.hide().map_err(|e| e.to_string())
+}
+
+/// Toggle the full-work-area widget overlay.
+///
+/// `expanded = true`: remembers the compact orb window rect, then grows the
+/// (transparent) window to cover the current monitor's work area so widgets
+/// can be laid out centre-screen. Returns where the compact window used to be
+/// as `[x, y, w, h]` in logical px relative to the new window, so the page can
+/// keep the orb exactly where the user left it. Mouse input outside the
+/// regions reported via `set_hit_regions` passes through to the desktop.
+///
+/// `expanded = false`: restores the saved compact rect and disables
+/// click-through. Returns `None`.
+#[tauri::command]
+fn set_overlay_mode(window: WebviewWindow, expanded: bool) -> Result<Option<[f64; 4]>, String> {
+    if expanded {
+        let monitor = window
+            .current_monitor()
+            .ok()
+            .flatten()
+            .or_else(|| window.primary_monitor().ok().flatten())
+            .ok_or("no monitor")?;
+        let scale = monitor.scale_factor();
+        let work = *monitor.work_area();
+
+        let already = OVERLAY_EXPANDED.load(Ordering::SeqCst);
+        if !already {
+            let pos = window.outer_position().map_err(|e| e.to_string())?;
+            let size = window.outer_size().map_err(|e| e.to_string())?;
+            *SAVED_COMPACT_RECT.lock().unwrap() = Some((pos.x, pos.y, size.width, size.height));
+        }
+        let (cx, cy, cw, ch) = SAVED_COMPACT_RECT
+            .lock()
+            .unwrap()
+            .unwrap_or((work.position.x, work.position.y, 300, 300));
+
+        HIT_REGIONS.lock().unwrap().clear();
+        OVERLAY_EXPANDED.store(true, Ordering::SeqCst);
+        if !already {
+            let _ = window.set_size(tauri::Size::Physical(work.size));
+            let _ = window.set_position(tauri::Position::Physical(work.position));
+            log_desktop(&format!(
+                "overlay expanded to work area ({}, {}) {}x{}",
+                work.position.x, work.position.y, work.size.width, work.size.height
+            ));
+        }
+        Ok(Some([
+            (cx - work.position.x) as f64 / scale,
+            (cy - work.position.y) as f64 / scale,
+            cw as f64 / scale,
+            ch as f64 / scale,
+        ]))
+    } else {
+        if !OVERLAY_EXPANDED.swap(false, Ordering::SeqCst) {
+            return Ok(None);
+        }
+        HIT_REGIONS.lock().unwrap().clear();
+        if IGNORING_CURSOR.swap(false, Ordering::SeqCst) {
+            let _ = window.set_ignore_cursor_events(false);
+        }
+        if let Some((x, y, w, h)) = SAVED_COMPACT_RECT.lock().unwrap().take() {
+            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                width: w,
+                height: h,
+            }));
+            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                x,
+                y,
+            }));
+        }
+        log_desktop("overlay collapsed");
+        Ok(None)
+    }
+}
+
+/// Interactive rects (logical px, client-relative) for the expanded overlay.
+#[tauri::command]
+fn set_hit_regions(regions: Vec<[f64; 4]>) -> Result<(), String> {
+    *HIT_REGIONS.lock().unwrap() = regions.into_iter().map(|r| (r[0], r[1], r[2], r[3])).collect();
+    Ok(())
 }
 
 fn ensure_window_on_screen(win: &WebviewWindow) {
@@ -616,6 +714,39 @@ fn spawn_native_input_engine(app: tauri::AppHandle) {
             }
             prev_alt_f5 = alt_f5;
 
+            // C0. Expanded widget overlay: the window covers the whole work
+            // area, so make it click-through everywhere except the widgets /
+            // orb the page reported. Only touch the OS flag on transitions.
+            if OVERLAY_EXPANDED.load(Ordering::SeqCst) {
+                let mut want_ignore = true;
+                if let (Some(pt), Some(r)) = (win32::cursor_pos(), win32::window_rect(hwnd)) {
+                    let lx = (pt.x - r.left) as f64 / scale;
+                    let ly = (pt.y - r.top) as f64 / scale;
+                    const PAD: f64 = 4.0;
+                    want_ignore = !HIT_REGIONS.lock().unwrap().iter().any(|&(x, y, w, h)| {
+                        lx >= x - PAD && lx <= x + w + PAD && ly >= y - PAD && ly <= y + h + PAD
+                    });
+                }
+                if IGNORING_CURSOR.load(Ordering::SeqCst) != want_ignore {
+                    if let Some(win) = app.get_webview_window("main") {
+                        if win.set_ignore_cursor_events(want_ignore).is_ok() {
+                            IGNORING_CURSOR.store(want_ignore, Ordering::SeqCst);
+                        }
+                    }
+                }
+                // No native orb-drag while expanded: the full-screen window
+                // must stay put so the widget layout lines up.
+                prev_lbutton = win32::is_key_down(win32::VK_LBUTTON);
+                press_started_on_orb = false;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                continue;
+            } else if IGNORING_CURSOR.load(Ordering::SeqCst) {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.set_ignore_cursor_events(false);
+                }
+                IGNORING_CURSOR.store(false, Ordering::SeqCst);
+            }
+
             // C. Native OS-level Orb Mouse Dragging (both Click+Drag and Double-Click+Move)
             if !IS_DRAGGING.load(Ordering::SeqCst) {
                 let lbutton = win32::is_key_down(win32::VK_LBUTTON);
@@ -706,7 +837,9 @@ fn main() {
             set_always_on_top,
             get_always_on_top,
             set_window_size,
-            hide_window
+            hide_window,
+            set_overlay_mode,
+            set_hit_regions
         ])
         .setup(|app| {
             log_desktop("Zoro desktop setup starting");

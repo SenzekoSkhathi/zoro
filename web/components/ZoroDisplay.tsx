@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useDataChannel, useRoomContext } from "@livekit/components-react";
 import { HudPanel } from "./HudPanel";
-import { useWidgetLimit } from "./WidgetLimit";
+import { useWidgetLimit, WidgetSlot } from "./WidgetLimit";
 import styles from "./ZoroDisplay.module.css";
 
 // Mirrors zoro_agent.publish_display: {kind, data}. Voice stays primary —
@@ -1072,7 +1072,7 @@ export function ZoroDisplay({
     Partial<Record<WidgetKind, Widget>>
   >({});
 
-  // Shared two-widget limiter, spanning grid widgets *and* the chat panel.
+  // Shared limiter (1 big + 2 small), spanning grid widgets *and* the chat panel.
   const { allowed, open, close: limitClose, clear: limitClear } =
     useWidgetLimit();
 
@@ -1122,6 +1122,8 @@ export function ZoroDisplay({
         "shell",
         "whatsapp",
         "youtube",
+        "system",
+        "browser",
       ]);
       if (!widgetKinds.has(parsed.kind as WidgetKind)) return;
       const kind = parsed.kind as WidgetKind;
@@ -1134,9 +1136,10 @@ export function ZoroDisplay({
         return;
       }
       // Upsert this kind's widget with a fresh timestamp, then register the
-      // open with the shared limiter. The limiter enforces the two-widget max
-      // and may evict the oldest surface (a grid widget or the chat panel);
-      // the reconcile effect below drops anything that falls out of `allowed`.
+      // open with the shared limiter. The limiter enforces the 1 big + 2 small
+      // max and may evict the oldest surface of the same size (a grid widget
+      // or the chat panel); the reconcile effect below drops anything that
+      // falls out of `allowed`.
       setWidgets((w) => ({ ...w, [kind]: incoming }));
       open(kind);
     } catch (e) {
@@ -1170,10 +1173,16 @@ export function ZoroDisplay({
 
   if (!active) return null;
 
+  // Slots are placed by the shared <WidgetStage> grid (big centre, smalls
+  // beside it) alongside the chat panel, so no wrapper here.
   return (
-    <div className={styles.grid}>
-      {list.map((w) => renderWidget(w, () => close(w.kind)))}
-    </div>
+    <>
+      {list.map((w) => (
+        <WidgetSlot key={w.kind} id={w.kind}>
+          {renderWidget(w, () => close(w.kind))}
+        </WidgetSlot>
+      ))}
+    </>
   );
 }
 
