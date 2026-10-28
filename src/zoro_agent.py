@@ -2794,19 +2794,16 @@ class Zoro(Agent):
         except Exception as e:  # noqa: BLE001
             return _spotify_error(e)
         if res["status"] != "playing":
-            if res["status"] == "wrong_track":
-                return (
-                    f"Spotify accepted the request for {res['name']}, but "
-                    f"{res['detail']} is playing instead."
-                )
             return (
-                f"Spotify accepted the request for {res['name']}, but I can't "
-                f"confirm it's playing yet. {res.get('detail', '')}"
-            ).strip()
+                f"Spotify selected {res['name']}"
+                f"{' by ' + res['artists'] if res.get('artists') else ''} "
+                f"for {query!r}, but I can't confirm it's playing. "
+                f"{res.get('detail', 'Check the Spotify app/device.')}"
+            )
         await publish_now_playing(delay=0.7)
         if res.get("artists"):
-            return f"Playing {res['name']} by {res['artists']}."
-        return f"Playing {res['name']}."
+            return f"Playing {res['name']} by {res['artists']} (Spotify result for {query!r})."
+        return f"Playing {res['name']} (Spotify result for {query!r})."
 
     @function_tool()
     @_logged
