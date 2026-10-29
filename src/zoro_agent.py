@@ -891,18 +891,35 @@ class Zoro(Agent):
         key = app_name.strip()
         try:
             match = await asyncio.to_thread(zoro_shell.open_app, key)
-            return f"Opening {match['name']}."
+            return f"Opening {match.get('name', app_name)}."
         except LookupError:
-            pass
-        except Exception:
-            pass
+            if sys.platform == "win32" and not zoro_shell.is_cloud():
+                target = APP_ALIASES.get(key.lower(), key)
+                try:
+                    subprocess.Popen(["cmd", "/c", "start", "", target], shell=True)
+                    return f"Opening {app_name}."
+                except Exception:
+                    pass
+            return f"I couldn't find an installed application matching '{app_name}', Sir."
+        except Exception as e:
+            err_msg = str(e)
+            if zoro_shell.is_cloud():
+                if "relay" in err_msg.lower() or "timeout" in err_msg.lower():
+                    return (
+                        f"I couldn't open {app_name}, Sir. My connection to your Windows laptop host relay "
+                        "timed out. Please verify that Zoro Supervisor is running on your laptop."
+                    )
+                return f"I couldn't open {app_name} on your laptop: {err_msg}"
 
-        target = APP_ALIASES.get(key.lower(), key)
-        try:
-            subprocess.Popen(["cmd", "/c", "start", "", target])
-            return f"Opening {app_name}."
-        except OSError as e:
-            return f"I couldn't open {app_name}: {e}"
+            if sys.platform == "win32":
+                target = APP_ALIASES.get(key.lower(), key)
+                try:
+                    subprocess.Popen(["cmd", "/c", "start", "", target], shell=True)
+                    return f"Opening {app_name}."
+                except Exception as ex:
+                    return f"I couldn't open {app_name}: {ex}"
+
+            return f"I couldn't open {app_name}: {err_msg}"
 
     @function_tool()
     @_logged

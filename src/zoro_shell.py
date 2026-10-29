@@ -99,28 +99,72 @@ def run_powershell(command: str, timeout: int = 180) -> dict:
 # --- App launching ---------------------------------------------------------
 
 
-def list_installed_apps() -> list[dict]:
-    """Enumerate Start-Menu apps via Get-StartApps.
+# Common aliases so spoken variations and short names map cleanly to Start Menu titles
+APP_NAME_ALIASES: dict[str, str] = {
+    "vscode": "Visual Studio Code",
+    "vs code": "Visual Studio Code",
+    "code": "Visual Studio Code",
+    "visual studio code": "Visual Studio Code",
+    "calc": "Calculator",
+    "calculator": "Calculator",
+    "browser": "Microsoft Edge",
+    "edge": "Microsoft Edge",
+    "chrome": "Google Chrome",
+    "google chrome": "Google Chrome",
+    "terminal": "Windows Terminal",
+    "powershell": "Windows PowerShell",
+    "cmd": "Command Prompt",
+    "files": "File Explorer",
+    "explorer": "File Explorer",
+    "file explorer": "File Explorer",
+    "word": "Word",
+    "excel": "Excel",
+    "spotify": "Spotify",
+    "paint": "Paint",
+    "notepad": "Notepad",
+    "settings": "Settings",
+    "camera": "Camera",
+}
+
+_APPS_CACHE: list[dict] = []
+_APPS_CACHE_TIME: float = 0.0
+_APPS_CACHE_TTL: float = 3600.0  # Cache Start-Menu app index for 1 hour
+
+
+def list_installed_apps(force_refresh: bool = False) -> list[dict]:
+    """Enumerate Start-Menu apps via Get-StartApps with in-memory caching.
 
     Returns [{name, app_id}]. Covers Win32, MSIX/UWP, and shortcut-
     installed apps — anything Windows considers an "app" you can
     launch from Start.
     """
+    global _APPS_CACHE, _APPS_CACHE_TIME
+    now = time.time()
+    if not force_refresh and _APPS_CACHE and (now - _APPS_CACHE_TIME < _APPS_CACHE_TTL):
+        return _APPS_CACHE
+
     res = run_powershell("Get-StartApps | ConvertTo-Json -Compress")
     if res["exit_code"] != 0:
+        if _APPS_CACHE:
+            return _APPS_CACHE
         raise RuntimeError(
             (res["stderr"] or "Get-StartApps failed").strip()
         )
     raw = (res["stdout"] or "").strip()
     if not raw:
-        return []
-    data = json.loads(raw)
-    if isinstance(data, dict):
-        data = [data]
-    return [
-        {"name": d.get("Name", ""), "app_id": d.get("AppID", "")}
-        for d in data
-    ]
+        return _APPS_CACHE
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            data = [data]
+        _APPS_CACHE = [
+            {"name": d.get("Name", ""), "app_id": d.get("AppID", "")}
+            for d in data
+        ]
+        _APPS_CACHE_TIME = now
+    except Exception:
+        pass
+    return _APPS_CACHE
 
 
 def find_app(name: str) -> Optional[dict]:
@@ -128,23 +172,34 @@ def find_app(name: str) -> Optional[dict]:
     needle = name.lower().strip()
     if not needle:
         return None
+
+    # Check aliases first
+    alias_target = APP_NAME_ALIASES.get(needle)
+    needle_resolved = alias_target.lower() if alias_target else needle
+
     apps = list_installed_apps()
+    # 1. Exact match against resolved needle or original needle
     exact = next(
-        (a for a in apps if a["name"].lower() == needle), None
+        (a for a in apps if a["name"].lower() in (needle_resolved, needle)), None
     )
     if exact:
         return exact
+
+    # 2. Prefix match
     prefix = next(
-        (a for a in apps if a["name"].lower().startswith(needle)),
+        (a for a in apps if a["name"].lower().startswith(needle_resolved) or a["name"].lower().startswith(needle)),
         None,
     )
     if prefix:
         return prefix
+
+    # 3. Substring match
     substring = next(
-        (a for a in apps if needle in a["name"].lower()), None
+        (a for a in apps if needle_resolved in a["name"].lower() or needle in a["name"].lower()), None
     )
     if substring:
         return substring
+
     # Fuzzy fallback for speech-to-text drift (e.g. "amatuba" -> "amathuba",
     # "discrod" -> "discord"). A dropped/extra letter defeats the substring
     # check but barely dents similarity, so compare against each app name
@@ -157,8 +212,8 @@ def find_app(name: str) -> Optional[dict]:
     for a in apps:
         title = a["name"].lower()
         score = max(
-            SequenceMatcher(None, needle, title).ratio(),
-            SequenceMatcher(None, needle, title.split()[0] if title.split() else title).ratio(),
+            SequenceMatcher(None, needle_resolved, title).ratio(),
+            SequenceMatcher(None, needle_resolved, title.split()[0] if title.split() else title).ratio(),
         )
         if score > best_score:
             best_score, best = score, a

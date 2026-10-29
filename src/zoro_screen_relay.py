@@ -130,7 +130,15 @@ def _get_redis_client():
         url = os.environ.get("REDIS_URL")
     if not url:
         raise ValueError("REDIS_URL environment variable is not set")
-    return redis.Redis.from_url(url, decode_responses=True, socket_timeout=5.0)
+    return redis.Redis.from_url(
+        url,
+        decode_responses=True,
+        socket_timeout=20.0,
+        socket_connect_timeout=10.0,
+        socket_keepalive=True,
+        health_check_interval=15,
+        retry_on_timeout=True,
+    )
 
 
 # --- Client Side (Executed by Worker in Linux Cloud or Local Agent) ---
@@ -447,6 +455,10 @@ def run_relay_service():
         except (redis.ConnectionError, redis.TimeoutError) as e:
             print(f"[host-relay] Redis connection error, reconnecting in 3s: {e}", flush=True)
             time.sleep(3.0)
+            try:
+                r = _get_redis_client()
+            except Exception:
+                pass
         except Exception as e:
             print(f"[host-relay] Unexpected loop error: {e}", flush=True)
             time.sleep(1.0)
