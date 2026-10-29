@@ -1875,6 +1875,17 @@ class Zoro(Agent):
                 "stderr": res["stderr"],
             },
         )
+        out_stream = (res.get("stdout") or "") + ("\n" + res["stderr"] if res.get("stderr") else "")
+        await publish_display(
+            "terminal",
+            {
+                "command": command,
+                "output": out_stream.strip(),
+                "status": "done" if res["exit_code"] == 0 else "failed",
+                "exit_code": res["exit_code"],
+                "cwd": os.getcwd().replace("\\", "/"),
+            },
+        )
         if res["exit_code"] == 0:
             out = (res["stdout"] or "").strip()
             if not out:
@@ -2151,6 +2162,191 @@ class Zoro(Agent):
     ) -> str:
         """Hand an engineering, coding, or editing task off to Zoro's Azure OpenAI Autonomous Engineer."""
         return await self.ask_claude_code(context, task, role)  # pyright: ignore[reportArgumentType]
+
+    @function_tool()
+    @_logged
+    async def broadcast_code_diff(
+        self,
+        context: RunContext,
+        file_path: str,
+        diff_text: str = "",
+        language: str = "typescript",
+        action: str = "edit",
+        status: str = "applied",
+        summary: str = "",
+    ) -> str:
+        """Stream or project a live file diff to the user's HUD screen.
+
+        Displays unified diffs with line numbers, + / - syntax highlights,
+        stats, and one-click 'Open in VS Code' & 'Copy Diff' buttons.
+
+        Args:
+            file_path: Relative or absolute path of the file being edited.
+            diff_text: Unified diff text (including @@ hunk headers or +/- lines).
+            language: File language (e.g. "typescript", "python", "css", "json").
+            action: Action type: "edit", "create", "delete", or "status".
+            status: Status of the diff: "applied", "pending", or "reverted".
+            summary: Short description of the change.
+        """
+        await publish_display(
+            "code_diff",
+            {
+                "file_path": file_path,
+                "diff_text": diff_text,
+                "language": language,
+                "action": action,
+                "status": status,
+                "summary": summary,
+            },
+        )
+        return f"Projected code diff for {file_path} to screen."
+
+    @function_tool()
+    @_logged
+    async def broadcast_terminal(
+        self,
+        context: RunContext,
+        command: str,
+        output: str = "",
+        status: str = "done",
+        exit_code: int = 0,
+        cwd: str = "",
+    ) -> str:
+        """Stream an interactive terminal session and command output to the screen.
+
+        Displays a dark cybernetic terminal with command prompt, elapsed execution timer,
+        and syntax-highlighted stdout / stderr streams.
+
+        Args:
+            command: The command line string being executed (e.g. 'npm run build').
+            output: Streaming stdout or stderr text.
+            status: Execution status: 'running', 'done', or 'failed'.
+            exit_code: Process exit code (0 for success).
+            cwd: Working directory of the command.
+        """
+        await publish_display(
+            "terminal",
+            {
+                "command": command,
+                "output": output,
+                "status": status,
+                "exit_code": exit_code,
+                "cwd": cwd or os.getcwd().replace("\\", "/"),
+            },
+        )
+        return f"Projected terminal stream for '{command}' to screen."
+
+    @function_tool()
+    @_logged
+    async def broadcast_task_plan(
+        self,
+        context: RunContext,
+        title: str,
+        steps: list[dict],
+        current_index: int = 0,
+        status: str = "running",
+        summary: str = "",
+    ) -> str:
+        """Display a multi-step mission control checklist and task execution DAG.
+
+        Shows a high-level progress bar, step statuses (done, in_progress, pending, failed),
+        sub-agent roles, and active step spinners.
+
+        Args:
+            title: High-level mission or task title.
+            steps: List of step dicts with keys: 'title', 'status' ('pending'|'in_progress'|'done'|'failed'), 'role' (optional), 'summary' (optional).
+            current_index: 0-based index of the currently active step.
+            status: Overall plan status ('running', 'completed', 'failed', 'paused').
+            summary: High-level status summary.
+        """
+        await publish_display(
+            "task_plan",
+            {
+                "title": title,
+                "steps": steps,
+                "current_step_index": current_index,
+                "status": status,
+                "summary": summary,
+            },
+        )
+        return f"Projected task plan '{title}' ({len(steps)} steps) to screen."
+
+    @function_tool()
+    @_logged
+    async def broadcast_ui_preview(
+        self,
+        context: RunContext,
+        title: str,
+        url: str = "",
+        html_content: str = "",
+        mode: str = "live",
+        device: str = "desktop",
+    ) -> str:
+        """Render a live interactive UI preview sandbox or Before/After comparison.
+
+        Allows testing websites, local development servers (e.g. localhost:3000),
+        rendered HTML components, and responsive viewport sizing (Desktop, Tablet, Mobile).
+
+        Args:
+            title: Name of the web page, component, or screen.
+            url: Local or remote URL to embed (e.g. 'http://localhost:3000').
+            html_content: Raw HTML/CSS to render in the sandbox iframe.
+            mode: 'live', 'compare', or 'snippet'.
+            device: Default viewport: 'desktop', 'tablet', or 'mobile'.
+        """
+        await publish_display(
+            "ui_preview",
+            {
+                "title": title,
+                "url": url,
+                "html": html_content,
+                "mode": mode,
+                "device": device,
+            },
+        )
+        return f"Projected UI preview '{title}' to screen."
+
+    @function_tool()
+    @_logged
+    async def broadcast_copilot(
+        self,
+        context: RunContext,
+        title: str,
+        action: str = "Analyzing element",
+        target_box: dict | None = None,
+        notes: str = "",
+        selector: str = "",
+        confidence: float = 0.95,
+        screenshot_url: str = "",
+    ) -> str:
+        """Project an interactive visual screen inspector and element targeting reticle.
+
+        Draws coordinate targeting bounding boxes, telemetry readouts, selector details,
+        and AI visual analysis notes over the screen.
+
+        Args:
+            title: Title of inspection session.
+            action: Action being performed (e.g. 'Inspecting button coordinates', 'Verifying layout').
+            target_box: Dict with 'x', 'y', 'width', 'height', and optional 'label'.
+            notes: Zoro's diagnosis or visual observation.
+            selector: CSS selector or element identifier.
+            confidence: Confidence score (0.0 to 1.0).
+            screenshot_url: Optional image data URL or path.
+        """
+        await publish_display(
+            "copilot",
+            {
+                "title": title,
+                "action": action,
+                "target_box": target_box,
+                "notes": notes,
+                "selector": selector,
+                "confidence": confidence,
+                "screenshot_url": screenshot_url,
+                "status": "inspecting",
+            },
+        )
+        return f"Projected Copilot inspector '{title}' to screen."
 
     @function_tool()
     @_logged
@@ -3251,12 +3447,12 @@ async def entrypoint(ctx: JobContext) -> None:
             "interruption": {
                 "enabled": True,
                 "mode": "adaptive",
-                "min_duration": 0.5,
+                "min_duration": 1.0,
                 "resume_false_interruption": True,
-                "false_interruption_timeout": 3.0,
-                "discard_audio_if_uninterruptible": True,
+                "false_interruption_timeout": 4.0,
+                "discard_audio_if_uninterruptible": False,
             },
-            "preemptive_generation": {"enabled": True, "preemptive_tts": True},
+            "preemptive_generation": {"enabled": False, "preemptive_tts": False},
         },
     )
 

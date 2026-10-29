@@ -522,3 +522,735 @@
   border-color: #ffb74d;
 }
 
+/* ==========================================================================
+   DEVELOPER WIDGET 1: CODE DIFF STREAMER (code_diff)
+   ========================================================================== */
+.diffHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.65rem;
+  background: rgba(12, 28, 40, 0.75);
+  border: 1px solid rgba(79, 227, 255, 0.22);
+  border-radius: 6px;
+  margin-bottom: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.diffFileGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.diffFilePath {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #c9f0ff;
+  word-break: break-all;
+}
+
+.diffTag {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.62rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: rgba(79, 227, 255, 0.15);
+  color: #4fe3ff;
+  border: 1px solid rgba(79, 227, 255, 0.35);
+  white-space: nowrap;
+}
+
+.diffStats {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.diffAddStat {
+  color: #00ffa3;
+  text-shadow: 0 0 8px rgba(0, 255, 163, 0.4);
+}
+
+.diffDelStat {
+  color: #ff4b6e;
+  text-shadow: 0 0 8px rgba(255, 75, 110, 0.4);
+}
+
+.diffActions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.diffBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.55rem;
+  background: rgba(15, 35, 50, 0.7);
+  border: 1px solid rgba(79, 227, 255, 0.28);
+  border-radius: 4px;
+  color: #a6e9ff;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.68rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.diffBtn:hover {
+  background: rgba(79, 227, 255, 0.22);
+  border-color: #4fe3ff;
+  color: #ffffff;
+  box-shadow: 0 0 8px rgba(79, 227, 255, 0.35);
+}
+
+.diffViewport {
+  position: relative;
+  max-height: 420px;
+  overflow-y: auto;
+  overflow-x: auto;
+  background: rgba(6, 16, 24, 0.92);
+  border: 1px solid rgba(79, 227, 255, 0.18);
+  border-radius: 6px;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.diffLine {
+  display: flex;
+  align-items: stretch;
+  min-width: 100%;
+  white-space: pre;
+}
+
+.diffLineOld,
+.diffLineNew {
+  flex: 0 0 2.4rem;
+  padding: 0.1rem 0.35rem;
+  text-align: right;
+  color: rgba(116, 174, 196, 0.5);
+  user-select: none;
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 0.68rem;
+}
+
+.diffLineMarker {
+  flex: 0 0 1.2rem;
+  text-align: center;
+  user-select: none;
+  font-weight: 700;
+}
+
+.diffLineContent {
+  flex: 1;
+  padding: 0.1rem 0.5rem;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.diffLineAdd {
+  background: rgba(0, 255, 163, 0.12);
+  border-left: 2px solid #00ffa3;
+}
+.diffLineAdd .diffLineMarker,
+.diffLineAdd .diffLineContent {
+  color: #8affc8;
+}
+
+.diffLineDel {
+  background: rgba(255, 75, 110, 0.12);
+  border-left: 2px solid #ff4b6e;
+}
+.diffLineDel .diffLineMarker,
+.diffLineDel .diffLineContent {
+  color: #ff9fb2;
+}
+
+.diffLineHunk {
+  background: rgba(79, 227, 255, 0.08);
+  border-top: 1px solid rgba(79, 227, 255, 0.15);
+  border-bottom: 1px solid rgba(79, 227, 255, 0.15);
+}
+.diffLineHunk .diffLineContent {
+  color: #74aec4;
+  font-style: italic;
+}
+
+.diffLineContext .diffLineMarker,
+.diffLineContext .diffLineContent {
+  color: #badbeb;
+}
+
+/* ==========================================================================
+   DEVELOPER WIDGET 2: INTERACTIVE TERMINAL (terminal)
+   ========================================================================== */
+.terminalCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.terminalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.4rem 0.65rem;
+  background: rgba(10, 22, 32, 0.85);
+  border: 1px solid rgba(79, 227, 255, 0.25);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.terminalPromptGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.8rem;
+  min-width: 0;
+}
+
+.terminalCwd {
+  color: #5fb4cf;
+  font-size: 0.7rem;
+}
+
+.terminalChevron {
+  color: #4fe3ff;
+  font-weight: 700;
+  text-shadow: 0 0 6px #4fe3ff;
+}
+
+.terminalCmd {
+  color: #f0f9ff;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.terminalMetaGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.terminalBadge {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 0.15rem 0.45rem;
+  border-radius: 3px;
+  letter-spacing: 0.06em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.terminalRunning {
+  background: rgba(79, 227, 255, 0.18);
+  border: 1px solid rgba(79, 227, 255, 0.5);
+  color: #4fe3ff;
+}
+
+.terminalDone {
+  background: rgba(0, 255, 163, 0.15);
+  border: 1px solid rgba(0, 255, 163, 0.4);
+  color: #00ffa3;
+}
+
+.terminalFailed {
+  background: rgba(255, 75, 110, 0.18);
+  border: 1px solid rgba(255, 75, 110, 0.5);
+  color: #ff4b6e;
+}
+
+.terminalPulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4fe3ff;
+  box-shadow: 0 0 8px #4fe3ff;
+  animation: pulseDot 1.2s infinite ease-in-out;
+}
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 0.3; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.25); }
+}
+
+.terminalBody {
+  position: relative;
+  max-height: 440px;
+  min-height: 180px;
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 0.75rem 0.85rem;
+  background: rgba(4, 12, 18, 0.95);
+  border: 1px solid rgba(79, 227, 255, 0.2);
+  border-radius: 6px;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: #cce9f5;
+  box-shadow: inset 0 2px 14px rgba(0, 0, 0, 0.7);
+}
+
+.terminalLine {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.terminalLineWarn {
+  color: #ffd54f;
+  background: rgba(255, 213, 79, 0.08);
+  border-left: 2px solid #ffd54f;
+  padding-left: 0.3rem;
+}
+
+.terminalLineErr {
+  color: #ff758f;
+  background: rgba(255, 117, 143, 0.1);
+  border-left: 2px solid #ff4b6e;
+  padding-left: 0.3rem;
+}
+
+.terminalLineOk {
+  color: #72f5be;
+}
+
+.terminalCursor {
+  display: inline-block;
+  width: 8px;
+  height: 14px;
+  background: #4fe3ff;
+  margin-left: 3px;
+  vertical-align: middle;
+  animation: blinkCursor 0.9s infinite step-start;
+  box-shadow: 0 0 6px #4fe3ff;
+}
+
+@keyframes blinkCursor {
+  50% { opacity: 0; }
+}
+
+/* ==========================================================================
+   DEVELOPER WIDGET 3: TASK PLAN & MISSION CONTROL (task_plan)
+   ========================================================================== */
+.planCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.planHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.6rem 0.8rem;
+  background: rgba(12, 28, 42, 0.7);
+  border: 1px solid rgba(79, 227, 255, 0.22);
+  border-radius: 6px;
+}
+
+.planTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.planTitle {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #eafbff;
+  letter-spacing: 0.02em;
+}
+
+.planStatusBadge {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.64rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+.planProgressRow {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.planProgressTrack {
+  flex: 1;
+  height: 6px;
+  background: rgba(79, 227, 255, 0.12);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid rgba(79, 227, 255, 0.2);
+}
+
+.planProgressBar {
+  height: 100%;
+  background: linear-gradient(90deg, #00c6ff, #00ffa3);
+  box-shadow: 0 0 8px rgba(0, 255, 163, 0.5);
+  transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.planProgressRatio {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #74aec4;
+  white-space: nowrap;
+}
+
+.planStepList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.planStep {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.55rem 0.7rem;
+  background: rgba(8, 20, 30, 0.6);
+  border: 1px solid rgba(79, 227, 255, 0.14);
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.planStepActive {
+  background: rgba(15, 36, 52, 0.85);
+  border-color: rgba(79, 227, 255, 0.55);
+  box-shadow: 0 0 16px rgba(79, 227, 255, 0.25);
+}
+
+.planStepDone {
+  border-color: rgba(0, 255, 163, 0.25);
+  background: rgba(5, 20, 25, 0.4);
+}
+
+.planStepFailed {
+  border-color: rgba(255, 75, 110, 0.45);
+  background: rgba(28, 10, 18, 0.4);
+}
+
+.planStepIcon {
+  flex: 0 0 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-top: 0.1rem;
+}
+
+.planStepIconDone {
+  background: rgba(0, 255, 163, 0.2);
+  color: #00ffa3;
+  border: 1px solid #00ffa3;
+  box-shadow: 0 0 6px rgba(0, 255, 163, 0.4);
+}
+
+.planStepIconActive {
+  background: rgba(79, 227, 255, 0.25);
+  color: #4fe3ff;
+  border: 1px solid #4fe3ff;
+  box-shadow: 0 0 8px rgba(79, 227, 255, 0.6);
+  animation: spinStep 2s linear infinite;
+}
+
+@keyframes spinStep {
+  to { transform: rotate(360deg); }
+}
+
+.planStepIconPending {
+  background: rgba(79, 227, 255, 0.05);
+  color: #5fb4cf;
+  border: 1px solid rgba(79, 227, 255, 0.18);
+}
+
+.planStepIconFailed {
+  background: rgba(255, 75, 110, 0.2);
+  color: #ff4b6e;
+  border: 1px solid #ff4b6e;
+}
+
+.planStepBody {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.planStepTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.planStepLabel {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #d8f2ff;
+}
+
+.planStepRoleBadge {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.6rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background: rgba(79, 227, 255, 0.12);
+  color: #5fb4cf;
+  border: 1px solid rgba(79, 227, 255, 0.25);
+  text-transform: uppercase;
+}
+
+.planStepSummary {
+  font-size: 0.75rem;
+  color: #8ac0d4;
+  line-height: 1.4;
+  margin: 0;
+}
+
+/* ==========================================================================
+   DEVELOPER WIDGET 4: UI PREVIEW & SANDBOX (ui_preview)
+   ========================================================================== */
+.previewCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.previewToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.4rem 0.65rem;
+  background: rgba(10, 24, 36, 0.8);
+  border: 1px solid rgba(79, 227, 255, 0.2);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.previewDeviceSwitch {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: rgba(4, 12, 18, 0.6);
+  padding: 0.15rem;
+  border-radius: 5px;
+  border: 1px solid rgba(79, 227, 255, 0.18);
+}
+
+.previewSwitchBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.22rem 0.5rem;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #74aec4;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.66rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.previewSwitchBtnActive {
+  background: rgba(79, 227, 255, 0.22);
+  color: #eafbff;
+  box-shadow: 0 0 8px rgba(79, 227, 255, 0.35);
+  font-weight: 600;
+}
+
+.previewFrameContainer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: rgba(4, 10, 16, 0.95);
+  border: 1px solid rgba(79, 227, 255, 0.25);
+  border-radius: 6px;
+  padding: 0.75rem;
+  overflow: hidden;
+  box-shadow: inset 0 2px 14px rgba(0, 0, 0, 0.7);
+}
+
+.previewIframe {
+  background: #ffffff;
+  border: none;
+  border-radius: 4px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  transition: width 0.3s ease, height 0.3s ease;
+  height: 400px;
+}
+
+.previewCompareGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.previewCompareCol {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.previewCompareLabel {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #74aec4;
+}
+
+.previewCompareThumb {
+  width: 100%;
+  border-radius: 4px;
+  border: 1px solid rgba(79, 227, 255, 0.2);
+  max-height: 320px;
+  object-fit: contain;
+  background: #000;
+}
+
+/* ==========================================================================
+   DEVELOPER WIDGET 5: SCREEN INSPECTOR & COPILOT (copilot)
+   ========================================================================== */
+.copilotCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.copilotHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.45rem 0.7rem;
+  background: rgba(12, 28, 42, 0.8);
+  border: 1px solid rgba(79, 227, 255, 0.22);
+  border-radius: 6px;
+}
+
+.copilotActionBadge {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.72rem;
+  color: #4fe3ff;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+}
+
+.copilotViewport {
+  position: relative;
+  width: 100%;
+  max-height: 380px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(79, 227, 255, 0.25);
+  background: rgba(2, 8, 12, 0.95);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.copilotScreenshot {
+  width: 100%;
+  height: auto;
+  max-height: 380px;
+  object-fit: contain;
+  display: block;
+}
+
+.copilotTargetBox {
+  position: absolute;
+  border: 2px solid #00ffa3;
+  box-shadow: 0 0 14px rgba(0, 255, 163, 0.6), inset 0 0 8px rgba(0, 255, 163, 0.3);
+  pointer-events: none;
+  animation: targetPulse 1.8s infinite ease-in-out;
+  border-radius: 2px;
+}
+
+@keyframes targetPulse {
+  0%, 100% { border-color: #00ffa3; box-shadow: 0 0 14px rgba(0, 255, 163, 0.6); }
+  50% { border-color: #4fe3ff; box-shadow: 0 0 20px rgba(79, 227, 255, 0.8); }
+}
+
+.copilotTargetLabel {
+  position: absolute;
+  top: -1.4rem;
+  left: 0;
+  background: rgba(0, 0, 0, 0.85);
+  color: #00ffa3;
+  border: 1px solid #00ffa3;
+  padding: 0.1rem 0.35rem;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.62rem;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.copilotTelemetryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.5rem;
+}
+
+.copilotTelemetryTile {
+  background: rgba(10, 24, 36, 0.65);
+  border: 1px solid rgba(79, 227, 255, 0.2);
+  border-radius: 5px;
+  padding: 0.45rem 0.6rem;
+}
+
+.copilotTileLabel {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.6rem;
+  color: #74aec4;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.copilotTileVal {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #a6e9ff;
+  margin-top: 0.15rem;
+  word-break: break-all;
+}
+
+

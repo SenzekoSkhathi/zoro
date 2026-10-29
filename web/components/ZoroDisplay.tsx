@@ -167,6 +167,71 @@ type BrowserData = {
   reason?: string;
 };
 
+type CodeDiffData = {
+  file_path: string;
+  diff_text?: string;
+  language?: string;
+  action?: "edit" | "create" | "delete" | "status";
+  additions?: number;
+  deletions?: number;
+  status?: "applied" | "pending" | "reverted";
+  summary?: string;
+};
+
+type TerminalData = {
+  command: string;
+  output?: string;
+  lines?: string[];
+  cwd?: string;
+  status?: "running" | "done" | "failed";
+  exit_code?: number;
+  duration_ms?: number;
+};
+
+type PlanStep = {
+  id?: string | number;
+  title: string;
+  status: "pending" | "in_progress" | "done" | "failed" | "skipped";
+  role?: string;
+  summary?: string;
+};
+
+type TaskPlanData = {
+  title: string;
+  goal?: string;
+  steps: PlanStep[];
+  current_step_index?: number;
+  status?: "running" | "completed" | "failed" | "paused";
+  summary?: string;
+};
+
+type UIPreviewData = {
+  title: string;
+  url?: string;
+  html?: string;
+  before_image_url?: string;
+  after_image_url?: string;
+  mode?: "live" | "compare" | "snippet";
+  device?: "desktop" | "tablet" | "mobile";
+};
+
+type CopilotData = {
+  title: string;
+  action?: string;
+  target_box?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    label?: string;
+  };
+  screenshot_url?: string;
+  notes?: string;
+  selector?: string;
+  confidence?: number;
+  status?: "inspecting" | "locked" | "action_taken" | "warning";
+};
+
 type DisplayCard =
   | { kind: "search"; data: SearchData }
   | { kind: "calendar"; data: CalendarData }
@@ -183,7 +248,12 @@ type DisplayCard =
   | { kind: "whatsapp"; data: WhatsAppData }
   | { kind: "youtube"; data: YouTubeData }
   | { kind: "system"; data: any }
-  | { kind: "browser"; data: BrowserData };
+  | { kind: "browser"; data: BrowserData }
+  | { kind: "code_diff"; data: CodeDiffData }
+  | { kind: "terminal"; data: TerminalData }
+  | { kind: "task_plan"; data: TaskPlanData }
+  | { kind: "ui_preview"; data: UIPreviewData }
+  | { kind: "copilot"; data: CopilotData };
 
 type WidgetKind = DisplayCard["kind"];
 
@@ -1034,6 +1104,652 @@ function BrowserCard({ data, onClose }: { data: BrowserData; onClose: () => void
   );
 }
 
+function CodeDiffCard({
+  data,
+  onClose,
+}: {
+  data: CodeDiffData;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const diffLines = (data.diff_text || "").split("\n");
+
+  let addCount = data.additions ?? 0;
+  let delCount = data.deletions ?? 0;
+
+  if (data.additions === undefined && data.deletions === undefined && data.diff_text) {
+    for (const line of diffLines) {
+      if (line.startsWith("+") && !line.startsWith("+++")) addCount++;
+      else if (line.startsWith("-") && !line.startsWith("---")) delCount++;
+    }
+  }
+
+  const handleCopy = () => {
+    if (!data.diff_text) return;
+    navigator.clipboard?.writeText(data.diff_text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const normPath = (data.file_path || "").replace(/\\/g, "/");
+  const fileName = normPath.split("/").pop() || normPath;
+  const vscodeUri = `vscode://file/${normPath.startsWith("/") ? normPath : `/${normPath}`}`;
+
+  let oldLine = 1;
+  let newLine = 1;
+
+  return (
+    <HudPanel
+      key="code_diff"
+      kind="CODE DIFF"
+      meta={`${addCount > 0 ? `+${addCount} ` : ""}${delCount > 0 ? `-${delCount} ` : ""}LINES`}
+      accent={data.status === "reverted" ? "gold" : "cyan"}
+      ariaLabel="Live Code Diff Viewer"
+      onClose={onClose}
+    >
+      <div className={styles.diffHeader}>
+        <div className={styles.diffFileGroup}>
+          <span className={styles.diffFilePath} title={data.file_path}>
+            {fileName}
+          </span>
+          <span className={styles.diffTag}>
+            {data.language || "code"} · {data.action || "edit"}
+          </span>
+        </div>
+        <div className={styles.diffStats}>
+          {addCount > 0 && <span className={styles.diffAddStat}>+{addCount}</span>}
+          {delCount > 0 && <span className={styles.diffDelStat}>-{delCount}</span>}
+        </div>
+        <div className={styles.diffActions}>
+          <button
+            type="button"
+            className={styles.diffBtn}
+            onClick={handleCopy}
+            title="Copy diff to clipboard"
+          >
+            {copied ? "✓ Copied" : "Copy Diff"}
+          </button>
+          <a
+            href={vscodeUri}
+            className={styles.diffBtn}
+            title="Open file in VS Code"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            VS Code ↗
+          </a>
+        </div>
+      </div>
+
+      <div className={styles.diffViewport}>
+        {diffLines.length === 0 ? (
+          <div style={{ padding: "0.85rem", color: "#74aec4" }}>No diff content.</div>
+        ) : (
+          diffLines.map((line, idx) => {
+            const isHunk = line.startsWith("@@");
+            const isAdd = line.startsWith("+") && !line.startsWith("+++");
+            const isDel = line.startsWith("-") && !line.startsWith("---");
+            const isHeader =
+              line.startsWith("diff ") ||
+              line.startsWith("index ") ||
+              line.startsWith("---") ||
+              line.startsWith("+++");
+
+            let lineClass = styles.diffLineContext;
+            let marker = " ";
+            let currOld: number | string = "";
+            let currNew: number | string = "";
+
+            if (isHunk) {
+              lineClass = styles.diffLineHunk;
+              marker = " ";
+              const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+              if (match) {
+                oldLine = parseInt(match[1], 10);
+                newLine = parseInt(match[2], 10);
+              }
+            } else if (isAdd) {
+              lineClass = styles.diffLineAdd;
+              marker = "+";
+              currNew = newLine++;
+            } else if (isDel) {
+              lineClass = styles.diffLineDel;
+              marker = "-";
+              currOld = oldLine++;
+            } else if (isHeader) {
+              lineClass = styles.diffLineHunk;
+            } else {
+              currOld = oldLine++;
+              currNew = newLine++;
+            }
+
+            return (
+              <div key={idx} className={`${styles.diffLine} ${lineClass}`}>
+                <span className={styles.diffLineOld}>{currOld}</span>
+                <span className={styles.diffLineNew}>{currNew}</span>
+                <span className={styles.diffLineMarker}>{marker}</span>
+                <span className={styles.diffLineContent}>{line}</span>
+              </div>
+            );
+          })
+        )}
+      </div>
+      {data.summary && (
+        <p className={styles.answer} style={{ fontSize: "0.82rem", marginTop: "0.6rem" }}>
+          {data.summary}
+        </p>
+      )}
+    </HudPanel>
+  );
+}
+
+function TerminalCard({
+  data,
+  onClose,
+}: {
+  data: TerminalData;
+  onClose: () => void;
+}) {
+  const logRef = useRef<HTMLDivElement | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [elapsed, setElapsed] = useState<number>(0);
+  const startTimeRef = useRef<number>(Date.now());
+
+  const isRunning = data.status === "running";
+
+  useEffect(() => {
+    if (!isRunning) return;
+    startTimeRef.current = Date.now();
+    const interval = setInterval(() => {
+      setElapsed(Math.round((Date.now() - startTimeRef.current) / 100) / 10);
+    }, 100);
+    return () => clearInterval(interval);
+  }, [isRunning]);
+
+  useEffect(() => {
+    if (logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [data.output, data.lines]);
+
+  const outputText = data.output || (data.lines ? data.lines.join("\n") : "");
+  const lines = data.lines || (data.output ? data.output.split("\n") : []);
+
+  const handleCopy = () => {
+    if (!outputText) return;
+    navigator.clipboard?.writeText(outputText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const badgeClass = isRunning
+    ? styles.terminalRunning
+    : data.status === "done" && (data.exit_code === undefined || data.exit_code === 0)
+    ? styles.terminalDone
+    : styles.terminalFailed;
+
+  const badgeText = isRunning
+    ? "RUNNING"
+    : data.exit_code === 0 || data.exit_code === undefined
+    ? "EXIT 0"
+    : `EXIT ${data.exit_code}`;
+
+  return (
+    <HudPanel
+      key="terminal"
+      kind="TERMINAL"
+      meta={isRunning ? `${elapsed.toFixed(1)}s` : badgeText}
+      accent={data.status === "failed" ? "gold" : "cyan"}
+      ariaLabel="Live Terminal Execution"
+      onClose={onClose}
+    >
+      <div className={styles.terminalCard}>
+        <div className={styles.terminalHead}>
+          <div className={styles.terminalPromptGroup}>
+            {data.cwd && <span className={styles.terminalCwd}>[{data.cwd}]</span>}
+            <span className={styles.terminalChevron}>❯</span>
+            <span className={styles.terminalCmd}>{data.command}</span>
+          </div>
+          <div className={styles.terminalMetaGroup}>
+            <span className={`${styles.terminalBadge} ${badgeClass}`}>
+              {isRunning && <span className={styles.terminalPulse} />}
+              {badgeText}
+            </span>
+            <button
+              type="button"
+              className={styles.diffBtn}
+              onClick={handleCopy}
+              title="Copy terminal output"
+            >
+              {copied ? "✓ Copied" : "Copy"}
+            </button>
+          </div>
+        </div>
+
+        <div className={styles.terminalBody} ref={logRef}>
+          {lines.length === 0 && isRunning && (
+            <div style={{ color: "#5fb4cf", fontStyle: "italic" }}>
+              Executing command stream…
+            </div>
+          )}
+          {lines.map((line, idx) => {
+            const lower = line.toLowerCase();
+            let lineClass = styles.terminalLine;
+            if (
+              lower.includes("error") ||
+              lower.includes("failed") ||
+              lower.includes("exception") ||
+              lower.includes("fatal")
+            ) {
+              lineClass = `${styles.terminalLine} ${styles.terminalLineErr}`;
+            } else if (lower.includes("warn") || lower.includes("warning")) {
+              lineClass = `${styles.terminalLine} ${styles.terminalLineWarn}`;
+            } else if (
+              lower.includes("success") ||
+              lower.includes("ready in") ||
+              lower.includes("compiled successfully") ||
+              lower.includes("passed")
+            ) {
+              lineClass = `${styles.terminalLine} ${styles.terminalLineOk}`;
+            }
+            return (
+              <div key={idx} className={lineClass}>
+                {line}
+              </div>
+            );
+          })}
+          {isRunning && <span className={styles.terminalCursor} />}
+        </div>
+      </div>
+    </HudPanel>
+  );
+}
+
+function TaskPlanCard({
+  data,
+  onClose,
+}: {
+  data: TaskPlanData;
+  onClose: () => void;
+}) {
+  const steps = data.steps || [];
+  const doneCount = steps.filter((s) => s.status === "done").length;
+  const pct = steps.length ? Math.round((doneCount / steps.length) * 100) : 0;
+  const activeIdx =
+    data.current_step_index ?? steps.findIndex((s) => s.status === "in_progress");
+
+  return (
+    <HudPanel
+      key="task_plan"
+      kind="MISSION CONTROL"
+      meta={`${doneCount}/${steps.length} DONE · ${pct}%`}
+      accent={data.status === "failed" ? "gold" : "cyan"}
+      ariaLabel="Task DAG & Execution Plan"
+      onClose={onClose}
+    >
+      <div className={styles.planCard}>
+        <div className={styles.planHeader}>
+          <div className={styles.planTitleRow}>
+            <span className={styles.planTitle}>{data.title}</span>
+            <span
+              className={styles.planStatusBadge}
+              style={{
+                background:
+                  data.status === "completed"
+                    ? "rgba(0, 255, 163, 0.2)"
+                    : data.status === "failed"
+                    ? "rgba(255, 75, 110, 0.2)"
+                    : "rgba(79, 227, 255, 0.2)",
+                color:
+                  data.status === "completed"
+                    ? "#00ffa3"
+                    : data.status === "failed"
+                    ? "#ff4b6e"
+                    : "#4fe3ff",
+                border: "1px solid currentColor",
+              }}
+            >
+              {data.status || "RUNNING"}
+            </span>
+          </div>
+
+          <div className={styles.planProgressRow}>
+            <div className={styles.planProgressTrack}>
+              <div
+                className={styles.planProgressBar}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <span className={styles.planProgressRatio}>
+              Step {Math.min(activeIdx >= 0 ? activeIdx + 1 : doneCount + 1, steps.length)} of{" "}
+              {steps.length}
+            </span>
+          </div>
+        </div>
+
+        <ul className={styles.planStepList}>
+          {steps.map((step, idx) => {
+            const isDone = step.status === "done";
+            const isActive = step.status === "in_progress" || idx === activeIdx;
+            const isFailed = step.status === "failed";
+
+            const stepClass = isFailed
+              ? `${styles.planStep} ${styles.planStepFailed}`
+              : isActive
+              ? `${styles.planStep} ${styles.planStepActive}`
+              : isDone
+              ? `${styles.planStep} ${styles.planStepDone}`
+              : styles.planStep;
+
+            const iconClass = isFailed
+              ? `${styles.planStepIcon} ${styles.planStepIconFailed}`
+              : isActive
+              ? `${styles.planStepIcon} ${styles.planStepIconActive}`
+              : isDone
+              ? `${styles.planStepIcon} ${styles.planStepIconDone}`
+              : `${styles.planStepIcon} ${styles.planStepIconPending}`;
+
+            return (
+              <li key={step.id || idx} className={stepClass}>
+                <div className={iconClass}>
+                  {isFailed ? "×" : isDone ? "✓" : isActive ? "◐" : "○"}
+                </div>
+                <div className={styles.planStepBody}>
+                  <div className={styles.planStepTop}>
+                    <span className={styles.planStepLabel}>{step.title}</span>
+                    {step.role && (
+                      <span className={styles.planStepRoleBadge}>{step.role}</span>
+                    )}
+                  </div>
+                  {step.summary && (
+                    <p className={styles.planStepSummary}>{step.summary}</p>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+
+        {data.summary && (
+          <p className={styles.answer} style={{ fontSize: "0.82rem", opacity: 0.9 }}>
+            {data.summary}
+          </p>
+        )}
+      </div>
+    </HudPanel>
+  );
+}
+
+function UIPreviewCard({
+  data,
+  onClose,
+}: {
+  data: UIPreviewData;
+  onClose: () => void;
+}) {
+  const [viewport, setViewport] = useState<"desktop" | "tablet" | "mobile">(
+    data.device || "desktop"
+  );
+  const [compareTab, setCompareTab] = useState<"after" | "before" | "split">("after");
+
+  const iframeWidth =
+    viewport === "mobile" ? "375px" : viewport === "tablet" ? "768px" : "100%";
+
+  const hasCompare = Boolean(data.before_image_url && data.after_image_url);
+
+  return (
+    <HudPanel
+      key="ui_preview"
+      kind="UI SANDBOX"
+      meta={viewport.toUpperCase()}
+      ariaLabel="Live UI Preview & Sandbox"
+      onClose={onClose}
+    >
+      <div className={styles.previewCard}>
+        <div className={styles.previewToolbar}>
+          <div className={styles.diffFileGroup}>
+            <span className={styles.diffFilePath}>{data.title}</span>
+            {data.url && (
+              <a
+                href={data.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={styles.diffBtn}
+              >
+                ↗ Open Tab
+              </a>
+            )}
+          </div>
+
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            {hasCompare && (
+              <div className={styles.previewDeviceSwitch}>
+                <button
+                  type="button"
+                  className={`${styles.previewSwitchBtn} ${
+                    compareTab === "before" ? styles.previewSwitchBtnActive : ""
+                  }`}
+                  onClick={() => setCompareTab("before")}
+                >
+                  Before
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.previewSwitchBtn} ${
+                    compareTab === "after" ? styles.previewSwitchBtnActive : ""
+                  }`}
+                  onClick={() => setCompareTab("after")}
+                >
+                  After
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.previewSwitchBtn} ${
+                    compareTab === "split" ? styles.previewSwitchBtnActive : ""
+                  }`}
+                  onClick={() => setCompareTab("split")}
+                >
+                  Split
+                </button>
+              </div>
+            )}
+
+            <div className={styles.previewDeviceSwitch}>
+              <button
+                type="button"
+                className={`${styles.previewSwitchBtn} ${
+                  viewport === "desktop" ? styles.previewSwitchBtnActive : ""
+                }`}
+                onClick={() => setViewport("desktop")}
+                title="Desktop (100%)"
+              >
+                🖥 Desktop
+              </button>
+              <button
+                type="button"
+                className={`${styles.previewSwitchBtn} ${
+                  viewport === "tablet" ? styles.previewSwitchBtnActive : ""
+                }`}
+                onClick={() => setViewport("tablet")}
+                title="Tablet (768px)"
+              >
+                📱 Tablet
+              </button>
+              <button
+                type="button"
+                className={`${styles.previewSwitchBtn} ${
+                  viewport === "mobile" ? styles.previewSwitchBtnActive : ""
+                }`}
+                onClick={() => setViewport("mobile")}
+                title="Mobile (375px)"
+              >
+                📲 Mobile
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {hasCompare && (compareTab === "split" || compareTab === "before") ? (
+          <div className={styles.previewCompareGrid}>
+            <div className={styles.previewCompareCol}>
+              <span className={styles.previewCompareLabel}>BEFORE CHANGE</span>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={data.before_image_url}
+                alt="Before changes"
+                className={styles.previewCompareThumb}
+              />
+            </div>
+            {compareTab === "split" && (
+              <div className={styles.previewCompareCol}>
+                <span className={styles.previewCompareLabel}>AFTER CHANGE</span>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={data.after_image_url}
+                  alt="After changes"
+                  className={styles.previewCompareThumb}
+                />
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className={styles.previewFrameContainer}>
+            {data.url ? (
+              <iframe
+                src={data.url}
+                title={data.title}
+                className={styles.previewIframe}
+                style={{ width: iframeWidth }}
+                sandbox="allow-scripts allow-same-origin allow-forms"
+              />
+            ) : data.html ? (
+              <iframe
+                srcDoc={data.html}
+                title={data.title}
+                className={styles.previewIframe}
+                style={{ width: iframeWidth }}
+                sandbox="allow-scripts allow-same-origin"
+              />
+            ) : data.after_image_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={data.after_image_url}
+                alt={data.title}
+                className={styles.previewCompareThumb}
+              />
+            ) : (
+              <div style={{ color: "#74aec4", padding: "2rem" }}>
+                No preview source provided.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </HudPanel>
+  );
+}
+
+function CopilotCard({
+  data,
+  onClose,
+}: {
+  data: CopilotData;
+  onClose: () => void;
+}) {
+  const box = data.target_box;
+
+  let boxStyle: React.CSSProperties = {};
+  if (box) {
+    const isPct = box.x <= 1 && box.y <= 1 && box.width <= 1 && box.height <= 1;
+    boxStyle = {
+      left: isPct ? `${box.x * 100}%` : `${box.x}px`,
+      top: isPct ? `${box.y * 100}%` : `${box.y}px`,
+      width: isPct ? `${box.width * 100}%` : `${box.width}px`,
+      height: isPct ? `${box.height * 100}%` : `${box.height}px`,
+    };
+  }
+
+  return (
+    <HudPanel
+      key="copilot"
+      kind="COPILOT INSPECTOR"
+      meta={data.status ? data.status.toUpperCase() : "TARGET LOCKED"}
+      accent={data.status === "warning" ? "gold" : "cyan"}
+      ariaLabel="Live Screen & UI Element Inspector"
+      onClose={onClose}
+    >
+      <div className={styles.copilotCard}>
+        <div className={styles.copilotHead}>
+          <div className={styles.copilotActionBadge}>
+            <span className={styles.terminalPulse} />
+            {data.action || "Analyzing Active Screen Coordinates"}
+          </div>
+          {data.confidence && (
+            <span className={styles.diffTag}>
+              {Math.round(data.confidence * 100)}% MATCH
+            </span>
+          )}
+        </div>
+
+        {data.screenshot_url && (
+          <div className={styles.copilotViewport}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={data.screenshot_url}
+              alt="Inspected viewport"
+              className={styles.copilotScreenshot}
+            />
+            {box && (
+              <div className={styles.copilotTargetBox} style={boxStyle}>
+                <span className={styles.copilotTargetLabel}>
+                  {box.label || data.selector || "TARGET"}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className={styles.copilotTelemetryGrid}>
+          {data.selector && (
+            <div className={styles.copilotTelemetryTile}>
+              <div className={styles.copilotTileLabel}>Element Selector</div>
+              <div className={styles.copilotTileVal}>{data.selector}</div>
+            </div>
+          )}
+          {box && (
+            <>
+              <div className={styles.copilotTelemetryTile}>
+                <div className={styles.copilotTileLabel}>Target Coords (X, Y)</div>
+                <div className={styles.copilotTileVal}>
+                  {box.x}, {box.y}
+                </div>
+              </div>
+              <div className={styles.copilotTelemetryTile}>
+                <div className={styles.copilotTileLabel}>Bounds (W × H)</div>
+                <div className={styles.copilotTileVal}>
+                  {box.width} × {box.height}
+                </div>
+              </div>
+            </>
+          )}
+          <div className={styles.copilotTelemetryTile}>
+            <div className={styles.copilotTileLabel}>Inspection State</div>
+            <div className={styles.copilotTileVal} style={{ color: "#00ffa3" }}>
+              {data.status || "ACTIVE"}
+            </div>
+          </div>
+        </div>
+
+        {data.notes && (
+          <p className={styles.answer} style={{ fontSize: "0.82rem", marginTop: "0.4rem" }}>
+            {data.notes}
+          </p>
+        )}
+      </div>
+    </HudPanel>
+  );
+}
+
 function weatherGlyph(condition: string): string {
   const c = condition.toLowerCase();
   if (c.includes("thunder")) return "⛈";
@@ -1124,6 +1840,11 @@ export function ZoroDisplay({
         "youtube",
         "system",
         "browser",
+        "code_diff",
+        "terminal",
+        "task_plan",
+        "ui_preview",
+        "copilot",
       ]);
       if (!widgetKinds.has(parsed.kind as WidgetKind)) return;
       const kind = parsed.kind as WidgetKind;
@@ -1499,6 +2220,26 @@ function renderWidget(w: Widget, onClose: () => void) {
 
   if (w.kind === "browser") {
     return <BrowserCard key={w.kind} data={w.data} onClose={onClose} />;
+  }
+
+  if (w.kind === "code_diff") {
+    return <CodeDiffCard key={w.kind} data={w.data} onClose={onClose} />;
+  }
+
+  if (w.kind === "terminal") {
+    return <TerminalCard key={w.kind} data={w.data} onClose={onClose} />;
+  }
+
+  if (w.kind === "task_plan") {
+    return <TaskPlanCard key={w.kind} data={w.data} onClose={onClose} />;
+  }
+
+  if (w.kind === "ui_preview") {
+    return <UIPreviewCard key={w.kind} data={w.data} onClose={onClose} />;
+  }
+
+  if (w.kind === "copilot") {
+    return <CopilotCard key={w.kind} data={w.data} onClose={onClose} />;
   }
 
   return null;

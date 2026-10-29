@@ -38,6 +38,11 @@ const BIG_IDS = new Set<string>([
   "shell",
   "youtube",
   "browser",
+  "code_diff",
+  "terminal",
+  "task_plan",
+  "ui_preview",
+  "copilot",
 ]);
 
 export function widgetSize(id: string): WidgetSize {
