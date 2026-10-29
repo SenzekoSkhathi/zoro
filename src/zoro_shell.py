@@ -128,11 +128,12 @@ APP_NAME_ALIASES: dict[str, str] = {
 
 _APPS_CACHE: list[dict] = []
 _APPS_CACHE_TIME: float = 0.0
-_APPS_CACHE_TTL: float = 3600.0  # Cache Start-Menu app index for 1 hour
+_APPS_CACHE_TTL: float = 3600.0  # In-memory TTL
+_APPS_CACHE_FILE = ROOT / "data" / "installed_apps.json"
 
 
 def list_installed_apps(force_refresh: bool = False) -> list[dict]:
-    """Enumerate Start-Menu apps via Get-StartApps with in-memory caching.
+    """Enumerate Start-Menu apps via Get-StartApps with persistent disk & in-memory caching.
 
     Returns [{name, app_id}]. Covers Win32, MSIX/UWP, and shortcut-
     installed apps — anything Windows considers an "app" you can
@@ -142,6 +143,19 @@ def list_installed_apps(force_refresh: bool = False) -> list[dict]:
     now = time.time()
     if not force_refresh and _APPS_CACHE and (now - _APPS_CACHE_TIME < _APPS_CACHE_TTL):
         return _APPS_CACHE
+
+    # Load from persistent disk cache if fresh (< 24 hours)
+    if not force_refresh and _APPS_CACHE_FILE.exists():
+        try:
+            mtime = _APPS_CACHE_FILE.stat().st_mtime
+            if now - mtime < 86400.0:  # 24 hours
+                data = json.loads(_APPS_CACHE_FILE.read_text(encoding="utf-8"))
+                if isinstance(data, list) and data:
+                    _APPS_CACHE = data
+                    _APPS_CACHE_TIME = now
+                    return _APPS_CACHE
+        except Exception:
+            pass
 
     res = run_powershell("Get-StartApps | ConvertTo-Json -Compress")
     if res["exit_code"] != 0:
@@ -157,11 +171,18 @@ def list_installed_apps(force_refresh: bool = False) -> list[dict]:
         data = json.loads(raw)
         if isinstance(data, dict):
             data = [data]
-        _APPS_CACHE = [
+        apps = [
             {"name": d.get("Name", ""), "app_id": d.get("AppID", "")}
             for d in data
+            if d.get("Name") and d.get("AppID")
         ]
+        _APPS_CACHE = apps
         _APPS_CACHE_TIME = now
+        try:
+            _APPS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _APPS_CACHE_FILE.write_text(json.dumps(apps, indent=2), encoding="utf-8")
+        except Exception:
+            pass
     except Exception:
         pass
     return _APPS_CACHE
@@ -225,8 +246,21 @@ def _local_open_app(name: str) -> dict:
     match = find_app(name)
     if not match:
         raise LookupError(f"no installed app matching {name!r}")
-    app_id = match["app_id"].replace('"', '`"')
-    cmd = f'Start-Process "shell:AppsFolder\\{app_id}"'
+    app_id = match["app_id"]
+    target = f"shell:AppsFolder\\{app_id}"
+
+    # Fast-path: Win32 native ShellExecute via os.startfile (<500ms)
+    import os
+    if hasattr(os, "startfile"):
+        try:
+            os.startfile(target)
+            return match
+        except Exception:
+            pass
+
+    # Fallback to PowerShell Start-Process
+    safe_id = app_id.replace('"', '`"')
+    cmd = f'Start-Process "shell:AppsFolder\\{safe_id}"'
     res = _local_run_powershell(cmd, timeout=10)
     if res["exit_code"] != 0:
         raise RuntimeError(
