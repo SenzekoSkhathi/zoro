@@ -53,8 +53,8 @@ jobs:
           tags: |
             baseformacrza.azurecr.io/zoro-agent:${{ github.sha }}
             baseformacrza.azurecr.io/zoro-agent:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/senzekoskhathi/zoro:${{ github.sha }}
+            ghcr.io/senzekoskhathi/zoro:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
