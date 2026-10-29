@@ -2242,7 +2242,7 @@ class Zoro(Agent):
         self,
         context: RunContext,
         title: str,
-        steps: list[dict],
+        steps: list[str],
         current_index: int = 0,
         status: str = "running",
         summary: str = "",
@@ -2254,22 +2254,46 @@ class Zoro(Agent):
 
         Args:
             title: High-level mission or task title.
-            steps: List of step dicts with keys: 'title', 'status' ('pending'|'in_progress'|'done'|'failed'), 'role' (optional), 'summary' (optional).
+            steps: List of task step titles or JSON step objects.
             current_index: 0-based index of the currently active step.
             status: Overall plan status ('running', 'completed', 'failed', 'paused').
             summary: High-level status summary.
         """
+        parsed_steps = []
+        for i, s in enumerate(steps):
+            if isinstance(s, dict):
+                parsed_steps.append(s)
+            elif isinstance(s, str) and s.strip().startswith("{") and s.strip().endswith("}"):
+                try:
+                    parsed = json.loads(s)
+                    if isinstance(parsed, dict) and "title" in parsed:
+                        parsed_steps.append(parsed)
+                        continue
+                except Exception:
+                    pass
+                parsed_steps.append({
+                    "id": i + 1,
+                    "title": s,
+                    "status": "done" if i < current_index else ("in_progress" if i == current_index else "pending"),
+                })
+            else:
+                parsed_steps.append({
+                    "id": i + 1,
+                    "title": str(s),
+                    "status": "done" if i < current_index else ("in_progress" if i == current_index else "pending"),
+                })
+
         await publish_display(
             "task_plan",
             {
                 "title": title,
-                "steps": steps,
+                "steps": parsed_steps,
                 "current_step_index": current_index,
                 "status": status,
                 "summary": summary,
             },
         )
-        return f"Projected task plan '{title}' ({len(steps)} steps) to screen."
+        return f"Projected task plan '{title}' ({len(parsed_steps)} steps) to screen."
 
     @function_tool()
     @_logged
@@ -2313,7 +2337,7 @@ class Zoro(Agent):
         context: RunContext,
         title: str,
         action: str = "Analyzing element",
-        target_box: dict | None = None,
+        target_box: str = "",
         notes: str = "",
         selector: str = "",
         confidence: float = 0.95,
@@ -2327,18 +2351,42 @@ class Zoro(Agent):
         Args:
             title: Title of inspection session.
             action: Action being performed (e.g. 'Inspecting button coordinates', 'Verifying layout').
-            target_box: Dict with 'x', 'y', 'width', 'height', and optional 'label'.
+            target_box: Optional bounding box as JSON '{"x": 100, "y": 200, "width": 50, "height": 30}' or comma-separated 'x,y,width,height'.
             notes: Zoro's diagnosis or visual observation.
             selector: CSS selector or element identifier.
             confidence: Confidence score (0.0 to 1.0).
             screenshot_url: Optional image data URL or path.
         """
+        parsed_box = None
+        if target_box:
+            if isinstance(target_box, dict):
+                parsed_box = target_box
+            elif isinstance(target_box, str):
+                tb = target_box.strip()
+                if tb.startswith("{") and tb.endswith("}"):
+                    try:
+                        parsed_box = json.loads(tb)
+                    except Exception:
+                        parsed_box = None
+                elif "," in tb:
+                    try:
+                        parts = [float(p.strip()) for p in tb.split(",") if p.strip()]
+                        if len(parts) >= 4:
+                            parsed_box = {
+                                "x": parts[0],
+                                "y": parts[1],
+                                "width": parts[2],
+                                "height": parts[3],
+                            }
+                    except Exception:
+                        parsed_box = None
+
         await publish_display(
             "copilot",
             {
                 "title": title,
                 "action": action,
-                "target_box": target_box,
+                "target_box": parsed_box,
                 "notes": notes,
                 "selector": selector,
                 "confidence": confidence,
