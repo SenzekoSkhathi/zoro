@@ -244,20 +244,24 @@ def _handle_local_host_command(cmd_type: str, params: dict[str, Any]) -> dict[st
     old_force = os.environ.pop("ZORO_FORCE_RELAY", None)
     old_cloud = os.environ.pop("ZORO_CLOUD", None)
     try:
+        import importlib
         if cmd_type == "powershell":
             import zoro_shell
+            importlib.reload(zoro_shell)
             cmd = str(params.get("command", ""))
             timeout = int(params.get("timeout", 180))
             return zoro_shell._local_run_powershell(cmd, timeout=timeout)
 
         elif cmd_type == "open_app":
             import zoro_shell
+            importlib.reload(zoro_shell)
             name = str(params.get("name", ""))
             res = zoro_shell._local_open_app(name)
             return res if isinstance(res, dict) else {"name": name}
 
         elif cmd_type == "list_apps":
             import zoro_shell
+            importlib.reload(zoro_shell)
             return {"apps": zoro_shell.list_installed_apps()}
 
         elif cmd_type == "mouse_click":

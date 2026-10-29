@@ -126,6 +126,27 @@ APP_NAME_ALIASES: dict[str, str] = {
     "camera": "Camera",
 }
 
+SYSTEM_APP_FALLBACKS: dict[str, str] = {
+    "notepad": "notepad",
+    "calculator": "calc",
+    "calc": "calc",
+    "paint": "mspaint",
+    "mspaint": "mspaint",
+    "file explorer": "explorer",
+    "explorer": "explorer",
+    "chrome": "chrome",
+    "google chrome": "chrome",
+    "edge": "msedge",
+    "browser": "msedge",
+    "settings": "ms-settings:",
+    "camera": "microsoft.windows.camera:",
+    "cmd": "cmd.exe",
+    "powershell": "powershell.exe",
+    "terminal": "wt.exe",
+    "task manager": "taskmgr",
+    "taskmgr": "taskmgr",
+}
+
 _APPS_CACHE: list[dict] = []
 _APPS_CACHE_TIME: float = 0.0
 _APPS_CACHE_TTL: float = 3600.0  # In-memory TTL
@@ -244,28 +265,44 @@ def find_app(name: str) -> Optional[dict]:
 
 def _local_open_app(name: str) -> dict:
     match = find_app(name)
+    import os
+
+    if match:
+        app_id = match["app_id"]
+        target = f"shell:AppsFolder\\{app_id}"
+
+        # Fast-path: Win32 native ShellExecute via os.startfile (<500ms)
+        if hasattr(os, "startfile"):
+            try:
+                os.startfile(target)
+                return match
+            except Exception:
+                pass
+
+        # Fallback to explorer.exe shell:AppsFolder
+        safe_id = app_id.replace('"', '`"')
+        cmd = f'Start-Process explorer.exe -ArgumentList "shell:AppsFolder\\{safe_id}"'
+        res = _local_run_powershell(cmd, timeout=10)
+        if res["exit_code"] == 0:
+            return match
+
+    # Fallback for system commands, direct executables, or URIs (e.g. calc, notepad, ms-settings:)
+    needle = name.lower().strip()
+    direct_target = SYSTEM_APP_FALLBACKS.get(needle)
+    if direct_target:
+        if hasattr(os, "startfile"):
+            try:
+                os.startfile(direct_target)
+                return {"name": name, "app_id": direct_target}
+            except Exception:
+                pass
+        res = _local_run_powershell(f'Start-Process "{direct_target}"', timeout=10)
+        if res["exit_code"] == 0:
+            return {"name": name, "app_id": direct_target}
+
     if not match:
         raise LookupError(f"no installed app matching {name!r}")
-    app_id = match["app_id"]
-    target = f"shell:AppsFolder\\{app_id}"
 
-    # Fast-path: Win32 native ShellExecute via os.startfile (<500ms)
-    import os
-    if hasattr(os, "startfile"):
-        try:
-            os.startfile(target)
-            return match
-        except Exception:
-            pass
-
-    # Fallback to PowerShell Start-Process
-    safe_id = app_id.replace('"', '`"')
-    cmd = f'Start-Process "shell:AppsFolder\\{safe_id}"'
-    res = _local_run_powershell(cmd, timeout=10)
-    if res["exit_code"] != 0:
-        raise RuntimeError(
-            (res["stderr"] or "Start-Process failed").strip()
-        )
     return match
 
 
